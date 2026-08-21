@@ -60,6 +60,19 @@ func drainMsg(cmd tea.Cmd) tea.Msg {
 	return cmd()
 }
 
+func currentPreviewMsg(m *UI, id string) previewLoadedMsg {
+	return previewLoadedMsg{
+		request: m.previewRequest(id, m.pendingPreviewRoot, m.previewGen),
+	}
+}
+
+func currentPreviewFailure(m *UI, id string, err error) previewLoadFailedMsg {
+	return previewLoadFailedMsg{
+		request: m.previewRequest(id, m.pendingPreviewRoot, m.previewGen),
+		err:     err,
+	}
+}
+
 // TestPreview_ScheduleSupersedesStaleTick verifies rapid moves bump the gen
 // so an earlier tick is dropped and only the latest fires a load.
 func TestPreview_ScheduleSupersedesStaleTick(t *testing.T) {
@@ -80,7 +93,7 @@ func TestPreview_ScheduleSupersedesStaleTick(t *testing.T) {
 	msg := cmd()
 	loaded, ok := msg.(previewLoadedMsg)
 	require.True(t, ok)
-	require.Equal(t, "s2", loaded.id)
+	require.Equal(t, "s2", loaded.request.key.sessionID)
 }
 
 // TestPreview_SkipsCommittedButSchedulesForeign verifies no preview is
@@ -103,7 +116,7 @@ func TestPreview_SkipsCommittedButSchedulesForeign(t *testing.T) {
 	require.NotNil(t, cmd)
 	loaded, ok := drainMsg(cmd).(previewLoadedMsg)
 	require.True(t, ok)
-	require.Equal(t, "foreign-id", loaded.id)
+	require.Equal(t, "foreign-id", loaded.request.key.sessionID)
 	require.Len(t, loaded.msgs, 1, "foreign preview content flows through PeekMessages")
 	require.Contains(t, ws.calls, "peek:/other:foreign-id", "foreign preview must use PeekMessages, not ListMessages")
 
@@ -111,7 +124,7 @@ func TestPreview_SkipsCommittedButSchedulesForeign(t *testing.T) {
 	// same-workspace path (ListMessages) instead of PeekMessages.
 	ws.calls = nil
 	drainMsg(m.schedulePreview("s-current", "/current"))
-	require.Contains(t, ws.calls, "s-current")
+	require.Contains(t, ws.calls, "peek:/current:s-current")
 }
 
 // TestPreview_LoadedDroppedIfCursorMovedOn verifies a resolved load for an id
@@ -123,7 +136,7 @@ func TestPreview_LoadedDroppedIfCursorMovedOn(t *testing.T) {
 	m.pendingPreviewID = "s2" // cursor now on s2
 
 	// A load that resolved for s1 (cursor since moved) is dropped.
-	require.Nil(t, m.handlePreviewLoaded(previewLoadedMsg{id: "s1"}))
+	require.Nil(t, m.handlePreviewLoaded(currentPreviewMsg(m, "s1")))
 	require.Empty(t, m.previewSessionID)
 }
 
@@ -134,7 +147,7 @@ func TestPreview_LoadedSetsPreviewing(t *testing.T) {
 	m := newPreviewTestUI(t, ws, "committed")
 	m.pendingPreviewID = "s1"
 
-	m.handlePreviewLoaded(previewLoadedMsg{id: "s1"})
+	m.handlePreviewLoaded(currentPreviewMsg(m, "s1"))
 	require.True(t, m.previewing())
 	require.Equal(t, "s1", m.previewSessionID)
 }
@@ -149,7 +162,7 @@ func TestPreview_CancelRestoresCommitted(t *testing.T) {
 	}}
 	m := newPreviewTestUI(t, ws, "committed")
 	m.pendingPreviewID = "s1"
-	m.handlePreviewLoaded(previewLoadedMsg{id: "s1"})
+	m.handlePreviewLoaded(currentPreviewMsg(m, "s1"))
 	require.True(t, m.previewing())
 
 	cmd := m.cancelPreview()
@@ -191,7 +204,7 @@ func TestPreview_BusyCommittedWhilePreviewing(t *testing.T) {
 	}}
 	m := newPreviewTestUI(t, ws, "committed")
 	m.pendingPreviewID = "s1"
-	m.handlePreviewLoaded(previewLoadedMsg{id: "s1"})
+	m.handlePreviewLoaded(currentPreviewMsg(m, "s1"))
 	require.True(t, m.previewing(), "preview is shown")
 
 	// While previewing, previewing() gates the message-event handler in
@@ -218,7 +231,7 @@ func TestPreview_ABAWithinDebounceEndsOnA(t *testing.T) {
 	// Preview A (simulate a completed load; load clears pending).
 	m.pendingPreviewID = "A"
 	m.previewGen++
-	m.handlePreviewLoaded(previewLoadedMsg{id: "A"})
+	m.handlePreviewLoaded(currentPreviewMsg(m, "A"))
 	require.Equal(t, "A", m.previewSessionID)
 	require.Empty(t, m.pendingPreviewID)
 
@@ -253,7 +266,7 @@ func TestPreview_RestoreDroppedIfPreviewRescheduled(t *testing.T) {
 	// Preview s1.
 	m.pendingPreviewID = "s1"
 	m.previewGen++
-	m.handlePreviewLoaded(previewLoadedMsg{id: "s1"})
+	m.handlePreviewLoaded(currentPreviewMsg(m, "s1"))
 	require.True(t, m.previewing())
 
 	// Cancel (e.g. cursor hit a header): starts a restore tagged with gen.
@@ -264,7 +277,7 @@ func TestPreview_RestoreDroppedIfPreviewRescheduled(t *testing.T) {
 
 	// Immediately schedule + load a new preview s2 before the restore lands.
 	m.schedulePreview("s2", "")
-	m.handlePreviewLoaded(previewLoadedMsg{id: "s2"})
+	m.handlePreviewLoaded(currentPreviewMsg(m, "s2"))
 	require.Equal(t, "s2", m.previewSessionID)
 
 	// Now the stale restore arrives last: must be dropped (gen advanced /
@@ -280,7 +293,7 @@ func TestPreview_LoadFailureClearsPending(t *testing.T) {
 	ws := &previewStubWorkspace{messages: map[string][]message.Message{}}
 	m := newPreviewTestUI(t, ws, "committed")
 	m.pendingPreviewID = "s1"
-	m.handlePreviewLoadFailed(previewLoadFailedMsg{id: "s1", err: context.DeadlineExceeded})
+	m.handlePreviewLoadFailed(currentPreviewFailure(m, "s1", context.DeadlineExceeded))
 	require.Empty(t, m.pendingPreviewID, "failed load clears pending so a return retries")
 }
 
@@ -301,7 +314,7 @@ func TestPreview_RestoreFetchErrorDoesNotWedge(t *testing.T) {
 	}
 	m := newPreviewTestUI(t, ws, "committed")
 	m.pendingPreviewID = "s1"
-	m.handlePreviewLoaded(previewLoadedMsg{id: "s1"})
+	m.handlePreviewLoaded(currentPreviewMsg(m, "s1"))
 	require.True(t, m.previewing())
 
 	cmd := m.cancelPreview()
@@ -321,7 +334,7 @@ func TestPreview_DoubleCancelDoesNotWedge(t *testing.T) {
 	}}
 	m := newPreviewTestUI(t, ws, "committed")
 	m.pendingPreviewID = "s1"
-	m.handlePreviewLoaded(previewLoadedMsg{id: "s1"})
+	m.handlePreviewLoaded(currentPreviewMsg(m, "s1"))
 
 	first := m.cancelPreview()
 	genAfterFirst := m.previewGen
@@ -352,7 +365,7 @@ func TestPreview_LoadFailAfterSupersedeDoesNotWedge(t *testing.T) {
 	}}
 	m := newPreviewTestUI(t, ws, "committed")
 	m.pendingPreviewID = "s1"
-	m.handlePreviewLoaded(previewLoadedMsg{id: "s1"})
+	m.handlePreviewLoaded(currentPreviewMsg(m, "s1"))
 
 	restoreCmd := m.cancelPreview()
 	staleRestore, _ := drainMsg(restoreCmd).(previewRestoreMsg)
@@ -360,7 +373,7 @@ func TestPreview_LoadFailAfterSupersedeDoesNotWedge(t *testing.T) {
 	// Schedule B, then its load fails.
 	m.schedulePreview("B", "")
 	require.Equal(t, "B", m.pendingPreviewID)
-	m.handlePreviewLoadFailed(previewLoadFailedMsg{id: "B", err: context.DeadlineExceeded})
+	m.handlePreviewLoadFailed(currentPreviewFailure(m, "B", context.DeadlineExceeded))
 	require.Empty(t, m.pendingPreviewID, "failed load clears pending")
 	require.False(t, m.previewing(), "no preview shown, not wedged")
 
@@ -470,4 +483,53 @@ func TestPreview_InstantLoadSupersededDoesNotRender(t *testing.T) {
 	require.Nil(t, m.handlePreviewLoaded(s1Msg))
 	require.Empty(t, m.previewSessionID, "superseded instant load must not render")
 	require.Equal(t, "s2", m.pendingPreviewID, "pending stays on the current session")
+}
+
+func TestPreview_CacheHitAvoidsWorkspaceRead(t *testing.T) {
+	t.Parallel()
+	ws := &previewStubWorkspace{messages: map[string][]message.Message{
+		"s1": {{ID: "p1"}},
+	}}
+	m := newPreviewTestUI(t, ws, "committed")
+
+	loaded := drainMsg(m.schedulePreview("s1", "")).(previewLoadedMsg)
+	m.handlePreviewLoaded(loaded)
+	require.Equal(t, []string{"peek:/current:s1"}, ws.calls)
+
+	m.cancelPreview()
+	ws.calls = nil
+	cached := drainMsg(m.schedulePreview("s1", "")).(previewLoadedMsg)
+	require.True(t, cached.cached)
+	require.Empty(t, ws.calls)
+}
+
+func TestPreviewCacheSeparatesRootsAndEvictsLeastRecentlyUsed(t *testing.T) {
+	t.Parallel()
+	var cache previewCache
+	now := time.Unix(1, 0)
+	one := previewKey{sessionID: "same", root: "/one"}
+	two := previewKey{sessionID: "same", root: "/two"}
+	cache.put(one, nil, now)
+	cache.put(two, nil, now)
+
+	_, ok := cache.get(one, now)
+	require.True(t, ok)
+	for i := range previewCacheCapacity - 1 {
+		cache.put(previewKey{sessionID: string(rune('a' + i))}, nil, now)
+	}
+	_, ok = cache.get(two, now)
+	require.False(t, ok)
+	_, ok = cache.get(one, now)
+	require.True(t, ok)
+}
+
+func TestPreviewCacheExpiresEntries(t *testing.T) {
+	t.Parallel()
+	var cache previewCache
+	loadedAt := time.Unix(1, 0)
+	key := previewKey{sessionID: "session", root: "/workspace"}
+	cache.put(key, nil, loadedAt)
+
+	_, ok := cache.get(key, loadedAt.Add(previewCacheTTL))
+	require.False(t, ok)
 }

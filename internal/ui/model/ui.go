@@ -322,9 +322,11 @@ type UI struct {
 	// service) or PeekMessages (any other known workspace, attached or
 	// not, read without switching this client's own workspace).
 	previewSessionID   string
+	previewSessionRoot string
 	pendingPreviewID   string
 	pendingPreviewRoot string
 	previewGen         int
+	previewCache       previewCache
 
 	// Leading-edge burst tracking (see session_preview.go). The first two
 	// preview loads inside a rolling burst window fire immediately; the
@@ -792,10 +794,7 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// blocking RPC on the hot Update path.
 		m.setEditorPrompt(msg.yolo)
 		// A real commit supersedes any live preview.
-		m.previewSessionID = ""
-		m.pendingPreviewID = ""
-		m.pendingPreviewRoot = ""
-		m.previewGen++
+		m.resetPreview()
 		m.setState(uiChat, m.focus)
 		m.session = msg.session
 		m.sessionFiles = msg.files
@@ -1567,33 +1566,38 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // setSessionMessages sets the messages for the current session in the chat
 func (m *UI) setSessionMessages(msgs []message.Message) tea.Cmd {
-	var cmds []tea.Cmd
+	prepared := m.buildSessionMessages(msgs)
+	return m.installSessionMessages(prepared)
+}
+
+type preparedSessionMessages struct {
+	items               []chat.MessageItem
+	lastUserMessageTime int64
+}
+
+func (m *UI) buildSessionMessages(msgs []message.Message) preparedSessionMessages {
 	// Build tool result map to link tool calls with their results
 	msgPtrs := make([]*message.Message, len(msgs))
 	for i := range msgs {
 		msgPtrs[i] = &msgs[i]
 	}
 	toolResultMap := chat.BuildToolResultMap(msgPtrs)
+	lastUserMessageTime := int64(0)
 	if len(msgPtrs) > 0 {
-		m.lastUserMessageTime = msgPtrs[0].CreatedAt
-	} else {
-		// Reset so the sidebar's turn-elapsed indicator doesn't carry
-		// over a stale timestamp from a previously viewed session.
-		m.lastUserMessageTime = 0
+		lastUserMessageTime = msgPtrs[0].CreatedAt
 	}
 
 	// Add messages to chat with linked tool results
 	items := make([]chat.MessageItem, 0, len(msgs)*2)
-	imgCfg := m.imageConfig()
 	for _, msg := range msgPtrs {
 		switch msg.Role {
 		case message.User:
-			m.lastUserMessageTime = msg.CreatedAt
+			lastUserMessageTime = msg.CreatedAt
 			items = append(items, chat.ExtractMessageItems(m.com.Styles, msg, toolResultMap)...)
 		case message.Assistant:
 			items = append(items, chat.ExtractMessageItems(m.com.Styles, msg, toolResultMap)...)
 			if msg.FinishPart() != nil && msg.FinishPart().Reason == message.FinishReasonEndTurn {
-				infoItem := chat.NewAssistantInfoItem(m.com.Styles, msg, m.com.Config(), time.Unix(m.lastUserMessageTime, 0))
+				infoItem := chat.NewAssistantInfoItem(m.com.Styles, msg, m.com.Config(), time.Unix(lastUserMessageTime, 0))
 				items = append(items, infoItem)
 			}
 		default:
@@ -1601,6 +1605,23 @@ func (m *UI) setSessionMessages(msgs []message.Message) tea.Cmd {
 		}
 	}
 
+	return preparedSessionMessages{items: items, lastUserMessageTime: lastUserMessageTime}
+}
+
+func (m *UI) installSessionMessages(prepared preparedSessionMessages) tea.Cmd {
+	m.lastUserMessageTime = prepared.lastUserMessageTime
+	cmds := m.activateSessionMessages(prepared.items)
+	m.chat.SetMessages(prepared.items...)
+	if cmd := m.chat.ScrollToBottomAndAnimate(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	m.chat.SelectLast()
+	return tea.Sequence(cmds...)
+}
+
+func (m *UI) activateSessionMessages(items []chat.MessageItem) []tea.Cmd {
+	var cmds []tea.Cmd
+	imgCfg := m.imageConfig()
 	for _, item := range items {
 		if toolItem, ok := item.(chat.ToolMessageItem); ok {
 			toolItem.SetImageConfig(imgCfg)
@@ -1615,21 +1636,8 @@ func (m *UI) setSessionMessages(msgs []message.Message) tea.Cmd {
 			}
 		}
 	}
-
-	// Load nested tool calls for agent/agentic_fetch tools.
-	nestedCmds := m.loadNestedToolCalls(items)
-	cmds = append(cmds, nestedCmds...)
-
-	// If the user switches between sessions while the agent is working we want
-	// to make sure the animations are shown.
-	cmds = append(cmds, startItemAnimations(items...)...)
-
-	m.chat.SetMessages(items...)
-	if cmd := m.chat.ScrollToBottomAndAnimate(); cmd != nil {
-		cmds = append(cmds, cmd)
-	}
-	m.chat.SelectLast()
-	return tea.Sequence(cmds...)
+	cmds = append(cmds, m.loadNestedToolCalls(items)...)
+	return append(cmds, startItemAnimations(items...)...)
 }
 
 // loadNestedToolCalls recursively loads nested tool calls for agent/agentic_fetch tools.
@@ -4682,13 +4690,10 @@ func (m *UI) newSession() tea.Cmd {
 	}
 
 	m.session = nil
+	m.resetPreview()
 	m.rightSidebarOffset = 0
 	m.sessionFiles = nil
 	m.sessionFileReads = nil
-	m.previewSessionID = ""
-	m.pendingPreviewID = ""
-	m.pendingPreviewRoot = ""
-	m.previewGen++
 	m.leftSidebar.SetActiveSession("")
 	// Clear active session for worktree-aware working directory.
 	m.com.Workspace.SetActiveSessionID("")
