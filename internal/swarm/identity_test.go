@@ -1,6 +1,9 @@
 package swarm
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseAddress(t *testing.T) {
 	t.Parallel()
@@ -58,6 +61,37 @@ func TestAssignStable(t *testing.T) {
 	}
 	if a.Color == "" || a.Animal == "" {
 		t.Fatalf("Assign returned empty identity: %+v", a)
+	}
+}
+
+func TestPatrioticDefaults(t *testing.T) {
+	t.Parallel()
+	list := animalList(Default())
+	if len(list) < 100 {
+		t.Fatalf("patriotic identity list has only %d entries", len(list))
+	}
+	seen := make(map[string]bool, len(list))
+	for _, name := range list {
+		if strings.Contains(name, "-") {
+			t.Fatalf("patriotic identity %q is not a single word", name)
+		}
+		if seen[name] {
+			t.Fatalf("duplicate patriotic identity %q", name)
+		}
+		seen[name] = true
+		if err := ValidateAnimalName(name); err != nil {
+			t.Fatalf("invalid patriotic identity %q: %v", name, err)
+		}
+	}
+
+	for i := range 1_000 {
+		identity := Assign(string(rune(i)), Default())
+		if !seen[identity.Color] || !seen[identity.Animal] {
+			t.Fatalf("Assign returned identity outside patriotic list: %+v", identity)
+		}
+		if identity.Color == identity.Animal {
+			t.Fatalf("Assign returned duplicate words: %+v", identity)
+		}
 	}
 }
 

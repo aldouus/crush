@@ -11,44 +11,25 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/taigrr/animals"
 	"github.com/taigrr/colorhash"
-	"github.com/taigrr/simplecolorpalettes/palettes/html"
-	"github.com/taigrr/simplecolorpalettes/simplecolor"
 )
 
 // Config controls how session identities are generated. It is populated
 // from the active theme's swarm_palette / swarm_animals fields (with
 // sensible defaults so nothing is required for the feature to work).
 type Config struct {
-	// Palette is the case-insensitive name of a simplecolorpalettes
-	// palette to hash into. Only "html" (default) is currently
-	// supported; unknown names fall back to html. Additional
-	// palettes can be plumbed through by extending namedPalette.
 	Palette string
-	// Animals overrides the animal name list; empty means use the
-	// full animals.Names() list.
 	Animals []string
 }
 
-// Default returns the built-in defaults: HTML named palette (aliceblue,
-// tomato, ...) and the full animals list.
+var patrioticIcons = []string{
+	"adams", "aldrin", "america", "americium", "apollo", "applepie", "armstrong", "artemis", "astronaut", "audie", "bancroft", "baseball", "bell", "bison", "boone", "buffalo", "cadillac", "cannon", "capitol", "carver", "challenger", "chrysler", "columbia", "constitution", "continental", "corvette", "cowboy", "crockett", "declaration", "discovery", "douglass", "dragon", "eagle", "earhart", "edison", "eisenhower", "endeavour", "enterprise", "falcon", "firework", "flag", "ford", "franklin", "freedom", "frontier", "gemini", "glenn", "goddard", "grant", "grissom", "hamilton", "hancock", "harley", "henry", "hopper", "humvee", "independence", "jeep", "jefferson", "jemison", "johnson", "kennedy", "lafayette", "langley", "liberty", "lincoln", "madison", "mayflower", "mercury", "minuteman", "mustang", "nasa", "norris", "oldglory", "orion", "parks", "patriot", "penn", "pioneer", "pocahontas", "revere", "ride", "roosevelt", "rushmore", "sacagawea", "saturn", "sequoia", "shepard", "skylab", "spacex", "starship", "stetson", "thunderbird", "tomahawk", "tractor", "truman", "tubman", "union", "veteran", "voyager", "washington", "whitman", "wright", "yankee", "yellowstone",
+}
+
 func Default() Config {
-	return Config{Palette: "html"}
+	return Config{Palette: "patriotic"}
 }
 
-// namedPalette resolves cfg.Palette to a NamedPalette. Unknown palette
-// names fall back to html.
-func namedPalette(cfg Config) simplecolor.NamedPalette {
-	switch strings.ToLower(strings.TrimSpace(cfg.Palette)) {
-	case "", "html":
-		return html.GetNamedPalette()
-	}
-	return html.GetNamedPalette()
-}
-
-// animalList resolves cfg.Animals to a stable, sorted slice. Empty
-// means use the built-in animals package.
 func animalList(cfg Config) []string {
 	if len(cfg.Animals) > 0 {
 		out := make([]string, 0, len(cfg.Animals))
@@ -62,7 +43,7 @@ func animalList(cfg Config) []string {
 			return out
 		}
 	}
-	return animals.Names()
+	return patrioticIcons
 }
 
 // Identity is a session's (color, animal) pair.
@@ -85,27 +66,19 @@ func (i Identity) String() string {
 // needed — but the swarm tool persists it to sessions.color/animal so
 // palette/animal-list changes do not silently rename live sessions.
 func Assign(sessionID string, cfg Config) Identity {
-	palette := namedPalette(cfg)
-	// Copy before sorting so we don't mutate a slice the palette
-	// package might share across callers (map-order defensively).
-	colorNames := append([]string(nil), palette.Names()...)
-	slices.Sort(colorNames)
-	if len(colorNames) == 0 {
-		colorNames = []string{"white"}
-	}
 	list := append([]string(nil), animalList(cfg)...)
 	slices.Sort(list)
 	if len(list) == 0 {
 		list = []string{"unknown"}
 	}
-	// Two independent hashes salted differently so color and animal
-	// don't correlate. modIndex normalizes signed-int hash outputs
-	// to a non-negative index defensively.
-	h1 := colorhash.HashString("color:" + sessionID)
-	h2 := colorhash.HashString("animal:" + sessionID)
+	first := modIndex(colorhash.HashString("first:"+sessionID), len(list))
+	second := modIndex(colorhash.HashString("second:"+sessionID), len(list))
+	if len(list) > 1 && first == second {
+		second = (second + 1) % len(list)
+	}
 	return Identity{
-		Color:  colorNames[modIndex(h1, len(colorNames))],
-		Animal: list[modIndex(h2, len(list))],
+		Color:  list[first],
+		Animal: list[second],
 	}
 }
 
