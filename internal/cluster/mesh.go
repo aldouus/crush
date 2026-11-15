@@ -90,7 +90,6 @@ func (n *Node) StartMesh(routeAddr string) (*Mesh, error) {
 		// Bridged API replies can be large (message lists).
 		MaxPayload: maxMeshPayload,
 		NoSigs:     true,
-		NoLog:      true,
 		// Device websocket: plain (no TLS) on loopback only. The public,
 		// gated, TLS-terminating listener in front of it is the server's
 		// job (websocket settings cannot be changed by config reload, so
@@ -118,6 +117,7 @@ func (n *Node) StartMesh(routeAddr string) (*Mesh, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create mesh server: %w", err)
 	}
+	srv.SetLoggerV2(newNATSLogger(nil, n.id.Name, false), false, false, false)
 	go srv.Start()
 	if !srv.ReadyForConnections(10 * time.Second) {
 		srv.Shutdown()
