@@ -7237,6 +7237,10 @@
                 "autobalance_margin": {
                     "description": "AutobalanceMargin is how much better (on a 0-1 load score) another\nnode must be before a job moves; nil uses the default.",
                     "type": "number"
+                },
+                "device_max_conns": {
+                    "description": "DeviceMaxConns caps concurrent NATS connections per paired device on\nthis node; a new connection over the cap closes the oldest. nil uses\nthe default (2), 0 is unlimited.",
+                    "type": "integer"
                 }
             }
         },
