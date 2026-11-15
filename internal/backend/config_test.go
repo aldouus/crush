@@ -221,3 +221,39 @@ func TestPublishConfigChanged_NilWorkspaceSafe(t *testing.T) {
 	require.NotPanics(t, func() { publishConfigChanged(nil) })
 	require.NotPanics(t, func() { publishConfigChanged(&Workspace{}) })
 }
+
+// collectConfigChanged gathers ConfigChanged events for workspaceID until
+// the stream is quiet for the given window.
+func collectConfigChanged(evc <-chan pubsub.Event[tea.Msg], workspaceID string, quiet time.Duration) []proto.ConfigChanged {
+	var out []proto.ConfigChanged
+	for {
+		select {
+		case ev := <-evc:
+			if cc, ok := ev.Payload.(pubsub.Event[proto.ConfigChanged]); ok && cc.Payload.WorkspaceID == workspaceID {
+				out = append(out, cc.Payload)
+			}
+		case <-time.After(quiet):
+			return out
+		}
+	}
+}
+
+func TestSetPermissionsSkip_PublishesOnChangeOnly(t *testing.T) {
+	b, ws, evc := newPublishingWorkspace(t)
+	drainEvents(evc, 100*time.Millisecond)
+
+	require.NoError(t, b.SetPermissionsSkip(ws.ID, true))
+	got := collectConfigChanged(evc, ws.ID, 200*time.Millisecond)
+	require.Len(t, got, 1)
+	require.NotNil(t, got[0].Yolo)
+	require.True(t, *got[0].Yolo)
+
+	require.NoError(t, b.SetPermissionsSkip(ws.ID, true))
+	require.Empty(t, collectConfigChanged(evc, ws.ID, 200*time.Millisecond), "no-op set must not publish")
+
+	require.NoError(t, b.SetPermissionsSkip(ws.ID, false))
+	got = collectConfigChanged(evc, ws.ID, 200*time.Millisecond)
+	require.Len(t, got, 1)
+	require.NotNil(t, got[0].Yolo)
+	require.False(t, *got[0].Yolo)
+}

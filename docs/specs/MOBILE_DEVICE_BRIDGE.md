@@ -240,11 +240,17 @@ Initial v1 set (everything else is `never` until annotated otherwise):
 | `POST /v1/voice/client-secret` | `sessions:prompt` | api |
 | `POST /v1/workspaces/{id}/permissions/grant` | `permissions:answer` | api |
 | `POST /v1/workspaces/{id}/questions/answer` | `permissions:answer` | api |
+| `GET /v1/workspaces/{id}/permissions/skip` | `sessions:read` | api |
 | `POST /v1/workspaces/{id}/permissions/skip` | `permissions:always` | api |
 | `POST /v1/workspaces/{id}/config/model` | `config:model` | api |
 | `POST /v1/workspaces/{id}/sessions/{sid}/model` | `config:model` | api |
 | `POST /v1/sessions/move` | `sessions:move` | api |
 | `POST /v1/workspaces/{id}/agent/sessions/{sid}/shell` | `shell` (opt-in) | api |
+
+Yolo changes are broadcast on the workspace event stream as a
+`config_changed` event whose payload carries the new value:
+`{"type":"config_changed","payload":{"type":"updated","payload":{"workspace_id":"…","yolo":true}}}`.
+`yolo` is omitted for other config changes. No-op sets emit nothing.
 
 Body rules enforced by the bridge on top of the route scope:
 

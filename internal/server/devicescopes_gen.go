@@ -58,7 +58,7 @@ var deviceRoutes = map[string]string{
 	"GET /v1/workspaces/{id}/mcp/states":                                "sessions:read",
 	"GET /v1/workspaces/{id}/messages/user":                             "never",
 	"GET /v1/workspaces/{id}/messages/{msgid}/snapshot":                 "never",
-	"GET /v1/workspaces/{id}/permissions/skip":                          "never",
+	"GET /v1/workspaces/{id}/permissions/skip":                          "sessions:read",
 	"GET /v1/workspaces/{id}/permissions/sysadmin":                      "never",
 	"GET /v1/workspaces/{id}/project/init-prompt":                       "never",
 	"GET /v1/workspaces/{id}/project/needs-init":                        "never",

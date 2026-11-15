@@ -4576,7 +4576,7 @@ const docTemplate = `{
                         }
                     }
                 },
-                "x-crush-scope": "never"
+                "x-crush-scope": "sessions:read"
             },
             "post": {
                 "consumes": [

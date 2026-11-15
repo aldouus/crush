@@ -423,6 +423,31 @@ func TestDeviceBridgeEndToEnd(t *testing.T) {
 		}
 	})
 
+	t.Run("yolo state", func(t *testing.T) {
+		readSkip := func() bool {
+			t.Helper()
+			resp := dev.get(base + "/permissions/skip")
+			require.Equal(t, http.StatusOK, resp.Status, resp.Error)
+			var got proto.PermissionSkipRequest
+			require.NoError(t, json.Unmarshal(resp.JSON, &got))
+			return got.Skip
+		}
+		require.False(t, readSkip(), "devices can read yolo state")
+
+		opened := dev.sub(streamRequest{Path: base + "/events", Query: json.RawMessage(`{"wire":"2","session_id":"` + alpha.ID + `"}`), Credit: 64})
+		require.Equal(t, http.StatusOK, opened.Status, opened.Error)
+		dev.frame(opened.Stream, func(f streamFrame) bool { return f.Type == frameHeartbeat })
+
+		resp := dev.post(base+"/permissions/skip", proto.PermissionSkipRequest{Skip: true})
+		require.Equal(t, http.StatusOK, resp.Status, resp.Error)
+		ev := dev.frame(opened.Stream, func(f streamFrame) bool {
+			return f.Type == frameEvent && strings.Contains(f.Data, `"config_changed"`)
+		})
+		require.Contains(t, ev.Data, `"yolo":true`)
+		require.True(t, readSkip())
+		t.Cleanup(func() { _ = srv.backend.SetPermissionsSkip(ws.ID, false) })
+	})
+
 	t.Run("reply subject spoofing", func(t *testing.T) {
 		other := pairPhone(t, srv, c)
 		on, err := other.connect(t)

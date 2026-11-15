@@ -5785,7 +5785,7 @@ paths:
       summary: Get skip permissions status
       tags:
       - permissions
-      x-crush-scope: never
+      x-crush-scope: sessions:read
     post:
       consumes:
       - application/json
