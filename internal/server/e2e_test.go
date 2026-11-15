@@ -293,6 +293,10 @@ func (h *e2eHarness) grantPermission(t *testing.T, ctx context.Context, workspac
 // waitForAttached spins until the workspace's clients map reports at
 // least n entries with streams > 0. Catches the race where a test
 // publishes events before the server-side AttachClient has completed.
+// e2eWait bounds waits for events that must arrive. It is generous for
+// slow -race runners (Windows); passing tests never wait it out.
+const e2eWait = 15 * time.Second
+
 func (h *e2eHarness) waitForAttached(t *testing.T, n int) {
 	t.Helper()
 	h.waitForAttachedOn(t, h.workspace, n)
@@ -303,7 +307,7 @@ func (h *e2eHarness) waitForAttached(t *testing.T, n int) {
 // harness (e.g. the real CreateWorkspace path) pass the workspace in.
 func (h *e2eHarness) waitForAttachedOn(t *testing.T, ws *backend.Workspace, n int) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(e2eWait)
 	for time.Now().Before(deadline) {
 		if backend.WorkspaceLiveStreamCountForTest(ws) >= n {
 			return
@@ -413,7 +417,7 @@ func TestE2E_TwoClientsReceiveSameMessage(t *testing.T) {
 		Payload: msg,
 	})
 
-	pickCtx, pickCancel := context.WithTimeout(ctx, 3*time.Second)
+	pickCtx, pickCancel := context.WithTimeout(ctx, e2eWait)
 	defer pickCancel()
 	gotA, okA := drainUntil(pickCtx, evcA, func(e pubsub.Event[proto.Message]) bool {
 		return e.Payload.ID == "m-1"
@@ -479,7 +483,7 @@ func TestE2E_PermissionFlowCrossClient(t *testing.T) {
 
 	// Wait for the PermissionRequest to arrive on client A's SSE
 	// stream. We need its ID to drive the grant.
-	pickCtx, pickCancel := context.WithTimeout(ctx, 3*time.Second)
+	pickCtx, pickCancel := context.WithTimeout(ctx, e2eWait)
 	defer pickCancel()
 	reqEv, ok := drainUntil(pickCtx, evcA, func(e pubsub.Event[proto.PermissionRequest]) bool {
 		return e.Payload.ToolCallID == toolCallID
@@ -564,7 +568,7 @@ func TestE2E_PermissionPromptBroadcastToBackgroundSession(t *testing.T) {
 		})
 	}()
 
-	pickCtx, pickCancel := context.WithTimeout(ctx, 3*time.Second)
+	pickCtx, pickCancel := context.WithTimeout(ctx, e2eWait)
 	defer pickCancel()
 
 	// A (viewing session-a) receives the prompt.
@@ -624,7 +628,7 @@ func TestE2E_KillingClientASSEDoesNotBreakClientB(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return backend.WorkspaceLiveStreamCountForTest(h.workspace) == 1
-	}, 3*time.Second, 10*time.Millisecond,
+	}, e2eWait, 10*time.Millisecond,
 		"expected client A's stream to drop the attached count to 1")
 
 	// Workspace must still exist (B is holding it open) and
@@ -647,7 +651,7 @@ func TestE2E_KillingClientASSEDoesNotBreakClientB(t *testing.T) {
 		Payload: msg,
 	})
 
-	pickCtx, pickCancel := context.WithTimeout(ctxB, 3*time.Second)
+	pickCtx, pickCancel := context.WithTimeout(ctxB, e2eWait)
 	defer pickCancel()
 	got, ok := drainUntil(pickCtx, evcB, func(e pubsub.Event[proto.Message]) bool {
 		return e.Payload.ID == "m-after"
@@ -685,14 +689,14 @@ func TestE2E_ShutdownCallbackFiresWhenLastClientLeaves(t *testing.T) {
 	killA()
 	require.Eventually(t, func() bool {
 		return backend.WorkspaceLiveStreamCountForTest(h.workspace) == 1
-	}, 3*time.Second, 10*time.Millisecond)
+	}, e2eWait, 10*time.Millisecond)
 	require.False(t, h.shutdownHit.Load(),
 		"shutdown must not fire after only one client disconnects")
 
 	cancelB()
 	killB()
 	require.Eventually(t, h.shutdownHit.Load,
-		3*time.Second, 10*time.Millisecond,
+		e2eWait, 10*time.Millisecond,
 		"shutdown callback must fire once the last client disconnects")
 
 	// Workspace must be gone from the index.
