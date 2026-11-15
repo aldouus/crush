@@ -95,14 +95,16 @@ func guarded[T any](ctx context.Context, g *stallGuard, key string, fn func(cont
 	var zero T
 	limit := g.limit()
 	ctx, cancel := context.WithTimeout(ctx, limit)
+	// Only the caller cancels: were fn's goroutine to cancel when done,
+	// the select below could see both res and ctx.Done ready and report
+	// a finished call as timed out.
+	defer cancel()
 	call, err := g.acquire(ctx, key)
 	if err != nil {
-		cancel()
 		return zero, err
 	}
 	res := make(chan guardResult[T], 1)
 	go func() {
-		defer cancel()
 		defer g.release(key, call)
 		val, err := fn(ctx)
 		res <- guardResult[T]{val: val, err: err}
@@ -111,6 +113,11 @@ func guarded[T any](ctx context.Context, g *stallGuard, key string, fn func(cont
 	case r := <-res:
 		return r.val, r.err
 	case <-ctx.Done():
+		select {
+		case r := <-res:
+			return r.val, r.err
+		default:
+		}
 		return zero, fmt.Errorf("%w: %s: timed out after %s", ErrDataDirUnavailable, key, limit)
 	}
 }

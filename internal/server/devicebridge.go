@@ -272,6 +272,22 @@ func (b *deviceBridge) release(deviceID string) {
 	}
 }
 
+// releaseOnce returns a func releasing one of deviceID's slots on its
+// first call only.
+func (b *deviceBridge) releaseOnce(deviceID string) func() {
+	var once sync.Once
+	return func() { once.Do(func() { b.release(deviceID) }) }
+}
+
+func isClosed(done <-chan struct{}) bool {
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
+}
+
 func rateLimited() *bridgeError {
 	return &bridgeError{Code: codeRateLimited, Message: "too many requests in flight", RetryAfterMS: rateLimitRetry.Milliseconds()}
 }
@@ -488,8 +504,14 @@ func (b *deviceBridge) onAPI(m *nats.Msg) {
 	}
 	ctx := b.work(d.DeviceID)
 	if !b.spawn(func() {
-		defer b.release(d.DeviceID)
+		release := b.releaseOnce(d.DeviceID)
+		defer release()
 		resp, done := b.route(ctx, d, tokens[5], req)
+		// A finished request frees its slot before the device hears back,
+		// so a device sending one request at a time is never limited.
+		if isClosed(done) {
+			release()
+		}
 		// A device revoked while the request ran gets no answer.
 		if ctx.Err() == nil && b.active(d.DeviceID) {
 			b.reply(m, resp, req.ID)
@@ -709,8 +731,12 @@ func (b *deviceBridge) onFwd(m *nats.Msg) {
 		}
 		ctx := b.work(d.DeviceID)
 		if !b.spawn(func() {
-			defer b.release(d.DeviceID)
+			release := b.releaseOnce(d.DeviceID)
+			defer release()
 			resp, done := b.execute(ctx, d, req)
+			if isClosed(done) {
+				release()
+			}
 			if ctx.Err() != nil {
 				// Revoked mid-request: tell the entry node rather than
 				// leaving it to time out (it never relays this).
@@ -738,8 +764,9 @@ func (b *deviceBridge) onFwd(m *nats.Msg) {
 			return
 		}
 		if !b.spawn(func() {
-			defer b.release(d.DeviceID)
-			respond(b.openStream(d, req), req.ID)
+			reply := b.openStream(d, req)
+			b.release(d.DeviceID)
+			respond(reply, req.ID)
 		}) {
 			b.release(d.DeviceID)
 			respond(streamFailure(req.ID, b.nodeID, unavailable("node is shutting down")), req.ID)
