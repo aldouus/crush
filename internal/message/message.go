@@ -365,6 +365,10 @@ func (s *service) flushOne(ctx context.Context, id string, syncCaller bool) erro
 		s.mu.Unlock()
 
 		err := s.write(ctx, snap)
+		// The row's updated_at is stamped by SQL; stamp the published
+		// copy the same way so streamed updates and fetched messages
+		// agree on which is newer.
+		snap.UpdatedAt = time.Now().Unix()
 
 		s.mu.Lock()
 		p.flushing = false
