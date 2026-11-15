@@ -41,6 +41,27 @@ const numClients = 8
 // about is observable strictly within ensureServer.
 const clientTimeout = 15 * time.Second
 
+// minScenarioTime is the minimum time that must remain on the test
+// deadline after building the binary for the race scenario to run.
+const minScenarioTime = 2 * time.Minute
+
+// crushBin caches the built crush binary so the package only builds
+// it once regardless of -count or how many tests need it.
+var crushBin struct {
+	once sync.Once
+	dir  string
+	path string
+	err  error
+}
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if crushBin.dir != "" {
+		_ = os.RemoveAll(crushBin.dir)
+	}
+	os.Exit(code)
+}
+
 func TestClientServerSpawnRace(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping client/server spawn race test in -short mode")
@@ -281,22 +302,50 @@ func repoRootFromTest(t *testing.T) string {
 	}
 }
 
-// buildCrushBinary builds the crush binary once at the start of the
-// test and returns the absolute path. Subsequent t.Cleanup removes
-// the built artefact.
+// buildCrushBinary builds the crush binary once per test process and
+// returns the absolute path. The build is bounded only by the test's
+// own deadline (go test -timeout), never by a fixed short timeout, so
+// a saturated runner (e.g. go test -race ./...) doesn't kill it. The
+// artefact is removed in TestMain.
 func buildCrushBinary(t *testing.T, repoRoot string) string {
+	t.Helper()
+
+	crushBin.once.Do(func() {
+		crushBin.path, crushBin.err = runCrushBuild(t, repoRoot)
+	})
+	if crushBin.err != nil {
+		t.Fatalf("go build crush: %v", crushBin.err)
+	}
+
+	if deadline, ok := t.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining < minScenarioTime {
+			t.Fatalf("insufficient time left after building crush: %s remaining, need at least %s; raise go test -timeout",
+				remaining.Round(time.Second), minScenarioTime)
+		}
+	}
+	return crushBin.path
+}
+
+func runCrushBuild(t *testing.T, repoRoot string) (string, error) {
 	t.Helper()
 
 	binDir, err := os.MkdirTemp("", "crush-race-bin-")
 	if err != nil {
-		t.Fatalf("mkdtemp bin: %v", err)
+		return "", fmt.Errorf("mkdtemp bin: %w", err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(binDir) })
+	crushBin.dir = binDir
 
 	binPath := filepath.Join(binDir, "crush")
 
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
-	defer cancel()
+	ctx := t.Context()
+	if deadline, ok := t.Deadline(); ok {
+		// Stop the build early enough to leave room for the race
+		// scenario and a clear failure message instead of a panic
+		// from the go test timeout.
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, deadline.Add(-minScenarioTime))
+		defer cancel()
+	}
 
 	cmd := exec.CommandContext(ctx, "go", "build", "-o", binPath, ".")
 	cmd.Dir = repoRoot
@@ -306,9 +355,13 @@ func buildCrushBinary(t *testing.T, repoRoot string) string {
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("go build crush: %v\n%s", err, out)
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("%w (build exceeded test deadline minus %s reserved for the race scenario; raise go test -timeout)\n%s",
+				err, minScenarioTime, out)
+		}
+		return "", fmt.Errorf("%w\n%s", err, out)
 	}
-	return binPath
+	return binPath, nil
 }
 
 // shutdownServer best-effort terminates any crush server bound to
