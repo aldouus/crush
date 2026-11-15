@@ -834,8 +834,11 @@ Mesh subjects (`crush.creds`, `crush.devices`, `crush.repl.*`, `$SYS`, `$JS.API`
 - On disconnect, retry the `urls`, then the endpoints of other `members`, with backoff.
 - The device ports are bound only while the device is paired (or an offer is open), so after revocation the port may be closed: a connection refused after a revocation is expected.
 - A revoked device's connections are closed by every node within one registry update, and new connections fail with `Authorization Violation`.
-- `Authorization Violation` alone is **not** proof of revocation: a member that has not yet received the device record (replication lag, a partition) refuses the same way. The pairing node installs the user before the poll reports `approved`, so connect to it first. Treat the device as removed only when the pairing node (or every reachable member) has refused for at least 60 seconds across at least 3 attempts; until then, back off and try other members. A `{"type":"revoked"}` message on `crush.client.v1.<dev>.control` is definitive.
-- After a confirmed removal: stop reconnecting, delete the seed and pins, and show "This device was removed; pair again".
+- `Authorization Violation` alone is **not** proof of revocation: a member that has not yet received the device record (replication lag, a partition) refuses the same way. The pairing node installs the user before the poll reports `approved`, so connect to it first.
+- **A client never deletes its identity on inference.** Only a `{"type":"revoked"}` message on `crush.client.v1.<dev>.control`, or an explicit user action, makes a client delete its seed, pins and members.
+- When the pairing node (or every reachable member) has refused for at least 60 seconds across at least 3 attempts, enter a non-destructive "sign-in rejected" state: stop fast retries and back off (e.g. minutes), show which nodes refused and their `-ERR` text, keep the identity, and offer Retry and an explicit "Forget this pairing". Until then, back off and try other members.
+- `Authentication Timeout` is **not** a refusal: the node never received a `CONNECT` within its auth timeout, which means a client handshake bug or a stalled transport. Do not count it toward the refusal rule (some NATS clients report it as an authorization error; check the text).
+- After a `revoked` message (or when the user chooses "Forget this pairing"): stop reconnecting, delete the seed, pins and members, and show "This device was removed; pair again".
 - Re-pairing a revoked phone requires a new seed (a new device ID).
 
 ### Errors
@@ -843,9 +846,10 @@ Mesh subjects (`crush.creds`, `crush.devices`, `crush.repl.*`, `$SYS`, `$JS.API`
 | Symptom | Meaning | Rush should |
 | --- | --- | --- |
 | TLS failure, pin mismatch | Wrong node, a MITM, or the cluster key was rotated | Stop; offer re-pair (rotation handling is phase 3). |
-| `Authorization Violation` | Unknown (not yet replicated) or revoked device | Retry with backoff; treat as revoked only as described above. |
+| `Authorization Violation` | Unknown (not yet replicated) or revoked device | Retry with backoff; after the refusal rule above, show "sign-in rejected". Never delete the identity. |
+| `Authentication Timeout` | The node got no `CONNECT` within its auth timeout: a client handshake bug or a stalled transport | Not a refusal; do not count it. Log it, reconnect with backoff, and check the client's NATS handshake. |
 | `Permissions Violation` (async) | A subject outside the scopes above | Bug in rush; log it. |
-| Connection refused | Port gated closed (no devices or offers) or node down | Try other members; if all refuse after a revocation, treat as revoked. |
+| Connection refused | Port gated closed (no devices or offers) or node down | Try other members; keep the identity until a `revoked` message or the user forgets the pairing. |
 | Connection closed right after connect | More than 8 websocket connections from this address (IPv6 grouped by /64), or the TLS handshake took over 3 s | Reuse one connection. |
 
 ### Server-side notes
