@@ -87,6 +87,7 @@ func TestDeviceRouterAllowList(t *testing.T) {
 	require.Empty(t, code("POST", "/v1/workspaces/w/agent", operator))
 	require.Empty(t, code("POST", "/v1/workspaces/w/permissions/grant", operator))
 	require.Equal(t, codeDeviceScopeDenied, code("POST", "/v1/workspaces/w/permissions/skip", operator), "yolo needs permissions:always")
+	require.Empty(t, code("GET", "/v1/workspaces/w/permissions/skip", viewer), "any paired device may read yolo state")
 	require.Equal(t, codeDeviceScopeDenied, code("POST", "/v1/workspaces/w/agent/sessions/s/shell", admin), "shell is opt-in")
 	_, e := r.authorize("POST", "/v1/workspaces/w/questions/answer", viewer)
 	require.Equal(t, devicescope.PermissionsAnswer, e.Scope)

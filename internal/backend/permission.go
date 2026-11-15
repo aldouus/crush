@@ -5,6 +5,7 @@ import (
 
 	"github.com/taigrr/crush/internal/permission"
 	"github.com/taigrr/crush/internal/proto"
+	"github.com/taigrr/crush/internal/pubsub"
 )
 
 // GrantPermission grants, denies, or persistently grants a permission
@@ -47,6 +48,10 @@ func (b *Backend) SetPermissionsSkip(workspaceID string, skip bool) error {
 		return err
 	}
 
+	// Serialize compare-and-set so concurrent toggles emit one event per
+	// actual transition.
+	b.mu.Lock()
+	changed := ws.Permissions.SkipRequests() != skip
 	ws.Permissions.SetSkipRequests(skip)
 	// Keep the config-store override in sync so proto reporting
 	// (workspaceToProto's YOLO field) reflects the runtime toggle while
@@ -55,9 +60,14 @@ func (b *Backend) SetPermissionsSkip(workspaceID string, skip bool) error {
 	if ws.Cfg != nil {
 		ws.Cfg.Overrides().SkipPermissionRequests = skip
 	}
-	b.mu.Lock()
 	b.yoloByRoot[ws.resolvedPath] = skip
 	b.mu.Unlock()
+	if changed && ws.App != nil {
+		ws.SendEvent(pubsub.Event[proto.ConfigChanged]{
+			Type:    pubsub.UpdatedEvent,
+			Payload: proto.ConfigChanged{WorkspaceID: ws.ID, Yolo: &skip},
+		})
+	}
 	return nil
 }
 

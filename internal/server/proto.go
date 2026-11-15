@@ -1818,7 +1818,7 @@ func (c *controllerV1) handlePostWorkspacePermissionsSkip(w http.ResponseWriter,
 //	@Success		200	{object}	proto.PermissionSkipRequest
 //	@Failure		404	{object}	proto.Error
 //	@Failure		500	{object}	proto.Error
-//	@x-crush-scope	"never"
+//	@x-crush-scope	"sessions:read"
 //	@Router			/workspaces/{id}/permissions/skip [get]
 func (c *controllerV1) handleGetWorkspacePermissionsSkip(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")

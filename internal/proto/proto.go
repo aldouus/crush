@@ -106,8 +106,13 @@ type SkillReadResult struct {
 // ConfigChanged is published whenever the workspace's configuration is
 // mutated by a backend operation. Clients react by re-fetching the
 // workspace snapshot so cached config stays in sync across subscribers.
+//
+// Yolo is set only when the change was a permission skip-requests
+// ("yolo mode") toggle and carries the new value, so clients can update
+// without a re-fetch.
 type ConfigChanged struct {
 	WorkspaceID string `json:"workspace_id"`
+	Yolo        *bool  `json:"yolo,omitempty"`
 }
 
 // CurrentSession is the request body for the per-client
