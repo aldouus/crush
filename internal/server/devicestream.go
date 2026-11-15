@@ -137,8 +137,8 @@ func (b *deviceBridge) onSub(m *nats.Msg) {
 	}
 	ctx := b.work(d.DeviceID)
 	if !b.spawn(func() {
-		defer b.release(d.DeviceID)
 		opened := b.routeStream(ctx, d, req)
+		b.release(d.DeviceID)
 		if ctx.Err() == nil && b.active(d.DeviceID) {
 			b.reply(m, opened, req.ID)
 		}
