@@ -136,6 +136,7 @@ func (l *tlsProxyListener) serve(ln net.Listener) {
 		}
 		source := sourceOf(conn.RemoteAddr())
 		if !l.track(ln, conn, source) {
+			slog.Warn("Device websocket rejected", "listener", l.name, "remote_addr", conn.RemoteAddr().String(), "reason", "per_source_limit")
 			conn.Close()
 			continue
 		}
@@ -179,19 +180,25 @@ func (l *tlsProxyListener) untrack(conn net.Conn, source string) {
 func (l *tlsProxyListener) handle(ln net.Listener, raw net.Conn, source string) {
 	defer l.untrack(raw, source)
 	defer raw.Close()
+	start := time.Now()
+	log := slog.With("listener", l.name, "remote_addr", raw.RemoteAddr().String())
+	log.Debug("Device websocket accepted")
 	conn := tls.Server(raw, l.tls())
 	defer conn.Close()
 	hctx, cancel := context.WithTimeout(context.Background(), proxyHandshakeTimeout)
 	err := conn.HandshakeContext(hctx)
 	cancel()
 	if err != nil {
+		log.Warn("Device websocket TLS handshake failed", "error", err, "duration", time.Since(start))
 		return
 	}
+	state := conn.ConnectionState()
+	log.Info("Device websocket connected", "tls_version", tls.VersionName(state.Version), "server_name", state.ServerName)
 	dctx, cancel := context.WithTimeout(context.Background(), proxyDialTimeout)
 	upstream, err := (&net.Dialer{}).DialContext(dctx, "tcp", l.target())
 	cancel()
 	if err != nil {
-		slog.Warn("Websocket upstream unavailable", "error", err)
+		log.Warn("Websocket upstream unavailable", "error", err)
 		return
 	}
 	defer upstream.Close()
@@ -201,6 +208,7 @@ func (l *tlsProxyListener) handle(ln net.Listener, raw net.Conn, source string) 
 	// Either side closing (the server dropping a revoked device, or the
 	// phone leaving) ends both.
 	<-done
+	log.Info("Device websocket closed", "duration", time.Since(start).Round(time.Millisecond))
 }
 
 // Stop closes the listener and every proxied connection.

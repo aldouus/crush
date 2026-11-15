@@ -37,6 +37,12 @@
           "minimum": 0,
           "description": "How much less loaded (0-1 score) another node must be before autobalance moves a job there",
           "default": 0.15
+        },
+        "device_max_conns": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum concurrent NATS connections per paired device on this node; extra connections close the oldest (0 = unlimited)",
+          "default": 2
         }
       },
       "additionalProperties": false,

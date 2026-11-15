@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"maps"
 	"net/http"
 	"net/url"
@@ -80,6 +81,7 @@ type deviceStream struct {
 	session  string
 	tune     streamTuning
 	cancel   context.CancelFunc
+	opened   time.Time
 
 	mu           sync.Mutex
 	cond         *sync.Cond
@@ -139,6 +141,11 @@ func (b *deviceBridge) onSub(m *nats.Msg) {
 		opened := b.routeStream(ctx, d, req)
 		if ctx.Err() == nil && b.active(d.DeviceID) {
 			b.reply(m, opened, req.ID)
+		}
+		if opened.Error != nil {
+			slog.Warn("Device stream open failed", "device_id", d.DeviceID, "node", b.nodeID,
+				"path", req.Path, "resume", req.Resume != nil, "status", opened.Status,
+				"error_code", string(opened.Error.Code), "error", opened.Error.Message)
 		}
 	}) {
 		b.release(d.DeviceID)
@@ -262,6 +269,7 @@ func (b *deviceBridge) openStream(d pairing.Device, req streamRequest) streamOpe
 		if !s.resume(req.Resume.AfterSeq, credit) {
 			return fail(newBridgeError(codeResumeUnavailable, "frames after after_seq are no longer buffered"))
 		}
+		slog.Info("Device stream resumed", "device_id", d.DeviceID, "node", b.nodeID, "stream", s.id, "after_seq", req.Resume.AfterSeq, "credit", credit)
 		return streamOpened{V: wireVersion, ID: req.ID, Status: http.StatusOK, NodeID: b.nodeID, Stream: s.id, FirstSeq: req.Resume.AfterSeq + 1}
 	}
 
@@ -297,7 +305,7 @@ func (b *deviceBridge) openStream(d pairing.Device, req streamRequest) streamOpe
 	s := &deviceStream{
 		b: b, id: id, deviceID: d.DeviceID, key: key, tune: b.tune, cancel: cancel, credit: credit,
 		subject:   subjClientRoot + d.DeviceID + "." + verbEvents + "." + id,
-		lastFrame: now, lastInterest: now, sessions: map[string]string{},
+		lastFrame: now, lastInterest: now, opened: now, sessions: map[string]string{},
 	}
 	s.session = session
 	s.cond = newCond(s)
@@ -315,6 +323,7 @@ func (b *deviceBridge) openStream(d pairing.Device, req streamRequest) streamOpe
 		b.closeStream(id)
 		return fail(unavailable("node is shutting down"))
 	}
+	slog.Info("Device stream opened", "device_id", d.DeviceID, "node", b.nodeID, "stream", id, "path", req.Path, "credit", credit)
 	return streamOpened{V: wireVersion, ID: req.ID, Status: http.StatusOK, NodeID: b.nodeID, Stream: id}
 }
 
@@ -554,6 +563,7 @@ func (b *deviceBridge) runStream(ctx context.Context, s *deviceStream, p string,
 		frame, err := s.encodeFrame(streamFrame{Seq: s.sent, Type: frameEvent, SessionID: sid, Data: data})
 		if err != nil {
 			s.mu.Unlock()
+			slog.Warn("Device stream frame dropped", "device_id", s.deviceID, "node", s.b.nodeID, "stream", s.id, "bytes", len(data), "error", err)
 			s.end(endError)
 			return
 		}
@@ -582,7 +592,11 @@ func (s *deviceStream) finish(w *streamWriter) {
 	}
 	s.cond.Broadcast()
 	s.controlFrameLocked(frameEnd, reason)
+	sent, acked := s.sent, s.acked
 	s.mu.Unlock()
+	slog.Info("Device stream closed", "device_id", s.deviceID, "node", s.b.nodeID, "stream", s.id,
+		"reason", reason, "frames_sent", sent, "frames_acked", acked,
+		"duration", time.Since(s.opened).Round(time.Millisecond))
 	// Flush outside the lock: it waits on the server, and acks for every
 	// stream share one dispatch goroutine.
 	_ = s.b.nc.Flush()

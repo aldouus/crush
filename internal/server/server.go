@@ -87,9 +87,10 @@ type Server struct {
 
 	// clientAddr is where the device client listener binds ("" disables
 	// it); pairing is set by EnableCluster.
-	clientAddr   string
-	clientWSAddr string
-	pairing      *pairingService
+	clientAddr     string
+	clientWSAddr   string
+	deviceMaxConns *int
+	pairing        *pairingService
 }
 
 // SetClientAddr sets the device client listener address (e.g. ":7733").
@@ -99,6 +100,10 @@ func (s *Server) SetClientAddr(addr string) { s.clientAddr = addr }
 // SetClientWSAddr sets the device NATS websocket address (e.g. ":7734",
 // "" disables it). Call before EnableCluster.
 func (s *Server) SetClientWSAddr(addr string) { s.clientWSAddr = addr }
+
+// SetDeviceMaxConns caps concurrent NATS connections per paired device
+// (0 = unlimited). Call before EnableCluster.
+func (s *Server) SetDeviceMaxConns(n int) { s.deviceMaxConns = &n }
 
 // SetLogger sets the logger for the server.
 func (s *Server) SetLogger(logger *slog.Logger) {

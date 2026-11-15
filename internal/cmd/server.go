@@ -107,7 +107,7 @@ var serverCmd = &cobra.Command{
 		srv := server.NewServer(cfg, hostURL.Scheme, hostURL.Host)
 		srv.SetLogger(slog.Default())
 		srv.Backend().SetPersistent(serverPersistent)
-		if err := enableCluster(srv); err != nil {
+		if err := enableCluster(srv, cfg.Config().Cluster); err != nil {
 			slog.Error("Failed to enable clustering", "error", err)
 		}
 		slog.Info("Starting Crush server...", "addr", serverHost)
@@ -158,7 +158,7 @@ func clusterDir() string {
 // when this node already belongs to a cluster. Upgrade requests from
 // peers install the requested release and stop the server so the
 // service manager restarts it on the new binary.
-func enableCluster(srv *server.Server) error {
+func enableCluster(srv *server.Server, cc *config.ClusterConfig) error {
 	node, err := cluster.NewNode(clusterDir(), version.Version)
 	if err != nil {
 		return err
@@ -183,5 +183,8 @@ func enableCluster(srv *server.Server) error {
 	}
 	srv.SetClientAddr(serverClientAddr)
 	srv.SetClientWSAddr(serverClientWS)
+	if cc != nil && cc.DeviceMaxConns != nil {
+		srv.SetDeviceMaxConns(*cc.DeviceMaxConns)
+	}
 	return srv.EnableCluster(node, serverClusterAddr, serverMeshAddr)
 }

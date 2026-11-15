@@ -88,6 +88,8 @@ type deviceBridge struct {
 	sessionExists func(ctx context.Context, workspaceID, sessionID string) (bool, error)
 	// lookup resolves a swarm address to its owner (a seam for tests).
 	lookup func(ctx context.Context, address string) (backend.SwarmLookupResult, error)
+	// logger overrides slog.Default for request logs (a seam for tests).
+	logger *slog.Logger
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -467,6 +469,7 @@ func (b *deviceBridge) onAPI(m *nats.Msg) {
 	if !ok || len(tokens) != 6 || !replyOK(m, d.DeviceID) {
 		return
 	}
+	start := time.Now()
 	req, berr := parseRequest(m.Data)
 	if berr != nil {
 		resp := errorResponse(req.ID, b.nodeID, berr)
@@ -474,10 +477,13 @@ func (b *deviceBridge) onAPI(m *nats.Msg) {
 			resp.Versions = []int{wireVersion}
 		}
 		b.reply(m, resp, req.ID)
+		b.logRequest(d.DeviceID, req, resp, start)
 		return
 	}
 	if !b.acquire(d.DeviceID) {
-		b.reply(m, errorResponse(req.ID, b.nodeID, rateLimited()), req.ID)
+		resp := errorResponse(req.ID, b.nodeID, rateLimited())
+		b.reply(m, resp, req.ID)
+		b.logRequest(d.DeviceID, req, resp, start)
 		return
 	}
 	ctx := b.work(d.DeviceID)
@@ -488,12 +494,50 @@ func (b *deviceBridge) onAPI(m *nats.Msg) {
 		if ctx.Err() == nil && b.active(d.DeviceID) {
 			b.reply(m, resp, req.ID)
 		}
+		b.logRequest(d.DeviceID, req, resp, start)
 		// The slot stays taken until the handler really returned.
 		<-done
 	}) {
 		b.release(d.DeviceID)
-		b.reply(m, errorResponse(req.ID, b.nodeID, unavailable("node is shutting down")), req.ID)
+		resp := errorResponse(req.ID, b.nodeID, unavailable("node is shutting down"))
+		b.reply(m, resp, req.ID)
+		b.logRequest(d.DeviceID, req, resp, start)
 	}
+}
+
+// logRequest logs one bridged API request: info on success, warn on
+// failure. Bodies, headers and query values are never logged.
+func (b *deviceBridge) logRequest(deviceID string, req bridgeRequest, resp bridgeResponse, start time.Time) {
+	args := []any{
+		"device_id", deviceID,
+		"node", b.nodeID,
+		"request_id", req.ID,
+		"method", req.Method,
+		"path", req.Path,
+		"status", resp.Status,
+		"latency", time.Since(start).Round(time.Microsecond),
+	}
+	if resp.NodeID != "" && resp.NodeID != b.nodeID {
+		args = append(args, "served_by", resp.NodeID)
+	}
+	if resp.Replayed {
+		args = append(args, "replayed", true)
+	}
+	if resp.Error != nil || resp.Status >= 400 {
+		if resp.Error != nil {
+			args = append(args, "error_code", string(resp.Error.Code), "error", resp.Error.Message)
+		}
+		b.log().Warn("Device bridge request failed", args...)
+		return
+	}
+	b.log().Info("Device bridge request", args...)
+}
+
+func (b *deviceBridge) log() *slog.Logger {
+	if b.logger != nil {
+		return b.logger
+	}
+	return slog.Default()
 }
 
 var closedDone = func() chan struct{} {

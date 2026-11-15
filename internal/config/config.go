@@ -813,6 +813,10 @@ type ClusterConfig struct {
 	// AutobalanceMargin is how much better (on a 0-1 load score) another
 	// node must be before a job moves; nil uses the default.
 	AutobalanceMargin *float64 `json:"autobalance_margin,omitempty" jsonschema:"description=How much less loaded (0-1 score) another node must be before autobalance moves a job there,default=0.15,minimum=0,maximum=1"`
+	// DeviceMaxConns caps concurrent NATS connections per paired device on
+	// this node; a new connection over the cap closes the oldest. nil uses
+	// the default (2), 0 is unlimited.
+	DeviceMaxConns *int `json:"device_max_conns,omitempty" jsonschema:"description=Maximum concurrent NATS connections per paired device on this node; extra connections close the oldest (0 = unlimited),default=2,minimum=0"`
 }
 
 // JSONSchemaProperty overrides the schema for the concurrent-map Providers
