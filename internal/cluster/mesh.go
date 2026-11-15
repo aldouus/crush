@@ -37,8 +37,12 @@ type Mesh struct {
 	opts   *natsserver.Options
 	nc     *nats.Conn
 	bc     *nats.Conn
+	ec     *nats.Conn
 	routes []string
 	wsAddr string
+
+	devMu   sync.RWMutex
+	devices map[string]string
 }
 
 // StartMesh starts the embedded NATS server with its route listener on
@@ -63,7 +67,9 @@ func (n *Node) StartMesh(routeAddr string) (*Mesh, error) {
 	m := &Mesh{node: n}
 	clientToken := rand.Text()
 	bridgeToken := rand.Text()
+	eventsToken := rand.Text()
 	clients := natsserver.NewAccount(ClientsAccount)
+	sysAcc := natsserver.NewAccount(natsserver.DEFAULT_SYSTEM_ACCOUNT)
 	opts := &natsserver.Options{
 		ServerName: n.id.ID,
 		// Routing only starts once the client listener is up, so bind it to
@@ -85,8 +91,17 @@ func (n *Node) StartMesh(routeAddr string) (*Mesh, error) {
 			Username: bridgeUser, Password: bridgeToken, Account: clients,
 			AllowedConnectionTypes: connTypes(jwt.ConnectionTypeInProcess),
 			Permissions:            bridgePermissions(),
+		}, {
+			// Watches device connection advisories for logging.
+			Username: eventsUser, Password: eventsToken, Account: sysAcc,
+			AllowedConnectionTypes: connTypes(jwt.ConnectionTypeInProcess),
+			Permissions: &natsserver.Permissions{
+				Publish:   &natsserver.SubjectPermission{Deny: []string{">"}},
+				Subscribe: &natsserver.SubjectPermission{Allow: []string{"$SYS.ACCOUNT.*.CONNECT", "$SYS.ACCOUNT.*.DISCONNECT", "$SYS.SERVER.*.CLIENT.AUTH.ERR"}},
+			},
 		}},
-		Accounts: []*natsserver.Account{clients},
+		Accounts:      []*natsserver.Account{clients, sysAcc},
+		SystemAccount: natsserver.DEFAULT_SYSTEM_ACCOUNT,
 		// Bridged API replies can be large (message lists).
 		MaxPayload: maxMeshPayload,
 		NoSigs:     true,
@@ -131,12 +146,20 @@ func (n *Node) StartMesh(routeAddr string) (*Mesh, error) {
 	// The server writes the chosen websocket port back into opts (it
 	// keeps our pointer); record it so later reloads compare equal.
 	m.wsAddr = net.JoinHostPort(opts.Websocket.Host, strconv.Itoa(opts.Websocket.Port))
-	bc, err := nats.Connect("", nats.InProcessServer(srv), nats.UserInfo(bridgeUser, bridgeToken), nats.Name("crush-bridge-"+n.id.Name), nats.MaxReconnects(-1))
+	bc, err := nats.Connect("", nats.InProcessServer(srv), nats.UserInfo(bridgeUser, bridgeToken), nats.Name("crush-bridge-"+n.id.Name), nats.MaxReconnects(-1), nats.ErrorHandler(slowConsumerHandler(n.id.Name, "device-bridge")))
 	if err != nil {
 		nc.Close()
 		srv.Shutdown()
 		return nil, fmt.Errorf("connect device bridge: %w", err)
 	}
+	ec, err := nats.Connect("", nats.InProcessServer(srv), nats.UserInfo(eventsUser, eventsToken), nats.Name("crush-events-"+n.id.Name), nats.MaxReconnects(-1))
+	if err == nil {
+		err = m.watchDeviceEvents(ec, srv.ID())
+	}
+	if err != nil {
+		slog.Warn("Device connection events unavailable", "error", err)
+	}
+	m.ec = ec
 	m.bc = bc
 	m.srv, m.opts, m.nc = srv, opts, nc
 	m.routes = urlStrings(opts.Routes)
@@ -196,6 +219,9 @@ func (m *Mesh) Close() {
 	}
 	if m.bc != nil {
 		m.bc.Close()
+	}
+	if m.ec != nil {
+		m.ec.Close()
 	}
 	if m.srv != nil {
 		m.srv.Shutdown()

@@ -384,7 +384,7 @@ func (p *pairingService) applyNATS(mesh *cluster.Mesh) error {
 			continue
 		}
 		perms := pairing.DevicePermissions(d.DeviceID)
-		users = append(users, cluster.ClientUser{Nkey: nkey, Publish: perms.Publish, Subscribe: perms.Subscribe})
+		users = append(users, cluster.ClientUser{Nkey: nkey, DeviceID: d.DeviceID, Publish: perms.Publish, Subscribe: perms.Subscribe})
 	}
 	if err := mesh.SetClientUsers(users); err != nil {
 		slog.Warn("Failed to install device NATS users", "error", err)

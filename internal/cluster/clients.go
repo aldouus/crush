@@ -29,7 +29,9 @@ const (
 // ClientUser is a device NATS user: its nkey and allowed subjects.
 // Everything not listed is denied, for both publish and subscribe.
 type ClientUser struct {
-	Nkey      string
+	Nkey string
+	// DeviceID is the paired device the nkey belongs to (for logs).
+	DeviceID  string
 	Publish   []string
 	Subscribe []string
 	// ConnectionTypes overrides the allowed connection types (tests);
@@ -129,6 +131,7 @@ func (m *Mesh) SetClientUsers(users []ClientUser) error {
 		return fmt.Errorf("reload mesh users: %w", err)
 	}
 	m.opts = next
+	m.setDevices(users)
 	slog.Info("Mesh device users updated", "devices", len(users))
 	return nil
 }
