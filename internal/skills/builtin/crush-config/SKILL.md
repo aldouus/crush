@@ -594,7 +594,8 @@ least loaded online node (opt-in):
 {
   "cluster": {
     "autobalance": true,
-    "autobalance_margin": 0.15
+    "autobalance_margin": 0.15,
+    "device_max_conns": 2
   }
 }
 ```
@@ -604,6 +605,9 @@ least loaded online node (opt-in):
   `crush run --balance` / `--balance=false` or `CRUSH_CLUSTER_AUTOBALANCE`.
 - `autobalance_margin` (default `0.15`, range 0-1): How much less loaded
   another node must be before a job moves.
+- `device_max_conns` (default `2`, `0` = unlimited): Maximum concurrent NATS
+  connections per paired device on this node. A new connection over the
+  cap closes the oldest ones (logged as evictions).
 
 ## Hooks
 

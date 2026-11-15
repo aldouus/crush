@@ -482,6 +482,9 @@ func (s *Server) startMesh() error {
 	if err != nil {
 		return err
 	}
+	if s.deviceMaxConns != nil {
+		mesh.SetDeviceMaxConns(*s.deviceMaxConns)
+	}
 	br := &meshBridge{mesh: mesh, node: s.cluster, backend: s.backend}
 	if err := br.subscribe(); err != nil {
 		mesh.Close()

@@ -43,6 +43,9 @@ type Mesh struct {
 
 	devMu   sync.RWMutex
 	devices map[string]string
+	conns   *deviceConns
+	// evict closes a client connection (a seam for tests).
+	evict func(cid uint64) error
 }
 
 // StartMesh starts the embedded NATS server with its route listener on
@@ -64,7 +67,7 @@ func (n *Node) StartMesh(routeAddr string) (*Mesh, error) {
 		host = "0.0.0.0"
 	}
 
-	m := &Mesh{node: n}
+	m := &Mesh{node: n, conns: newDeviceConns(DefaultDeviceMaxConns)}
 	clientToken := rand.Text()
 	bridgeToken := rand.Text()
 	eventsToken := rand.Text()

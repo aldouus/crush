@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
@@ -61,7 +62,11 @@ func (m *Mesh) logDeviceEvent(subject string, ev natsserver.DisconnectEventMsg) 
 	}
 	switch ev.Type {
 	case natsserver.ConnectEventMsgType:
-		slog.Info("Device NATS auth ok", args...)
+		start := time.Now()
+		if c.Start != nil {
+			start = *c.Start
+		}
+		m.trackConnect(c.User, deviceConn{cid: c.ID, remote: c.Host, start: start}, args)
 	case natsserver.DisconnectEventMsgType:
 		args = append(args, "reason", ev.Reason,
 			"msgs_in", ev.Received.Msgs, "msgs_out", ev.Sent.Msgs)
@@ -72,6 +77,7 @@ func (m *Mesh) logDeviceEvent(subject string, ev natsserver.DisconnectEventMsg) 
 			slog.Warn("Device NATS auth failed", args...)
 			return
 		}
+		args = append(args, "conns", m.conns.remove(c.User, c.ID))
 		slog.Info("Device NATS disconnected", args...)
 	}
 }
