@@ -19,13 +19,18 @@ type fakeDialer struct {
 	calls    atomic.Int32
 	cleanups atomic.Int32
 	gate     chan struct{}
-	fail     atomic.Bool
-	mu       sync.Mutex
-	streams  []chan any
+	// dialing, when set, receives one value as each dial starts.
+	dialing chan struct{}
+	fail    atomic.Bool
+	mu      sync.Mutex
+	streams []chan any
 }
 
 func (f *fakeDialer) dial(dir string) (*mcpEntry, error) {
 	f.calls.Add(1)
+	if f.dialing != nil {
+		f.dialing <- struct{}{}
+	}
 	if f.gate != nil {
 		<-f.gate
 	}
@@ -37,6 +42,25 @@ func (f *fakeDialer) dial(dir string) (*mcpEntry, error) {
 	f.streams = append(f.streams, events)
 	f.mu.Unlock()
 	return newMCPEntry(nil, &proto.Workspace{ID: "ws-" + dir, Path: dir}, events, func() {}, func() { f.cleanups.Add(1) }), nil
+}
+
+// mcpWait bounds waits for things that must happen; generous for slow
+// -race runners (Windows), never waited out by a passing test.
+const mcpWait = 30 * time.Second
+
+// newGatedDialer returns a dialer whose dials block until gate closes.
+func newGatedDialer() *fakeDialer {
+	return &fakeDialer{gate: make(chan struct{}), dialing: make(chan struct{}, 16)}
+}
+
+// waitDialing waits until a dial has started.
+func waitDialing(t *testing.T, f *fakeDialer) {
+	t.Helper()
+	select {
+	case <-f.dialing:
+	case <-time.After(mcpWait):
+		t.Fatal("no dial started")
+	}
 }
 
 func newTestConnector(f *fakeDialer) *mcpConnector {
@@ -68,7 +92,7 @@ func TestMCPConnector_CachesPerCanonicalDir(t *testing.T) {
 func TestMCPConnector_ConcurrentFirstConnectDialsOnce(t *testing.T) {
 	t.Parallel()
 
-	f := &fakeDialer{gate: make(chan struct{})}
+	f := newGatedDialer()
 	m := newTestConnector(f)
 	dir := t.TempDir()
 
@@ -79,7 +103,7 @@ func TestMCPConnector_ConcurrentFirstConnectDialsOnce(t *testing.T) {
 			errs <- err
 		}()
 	}
-	require.Eventually(t, func() bool { return f.calls.Load() == 1 }, time.Second, 5*time.Millisecond)
+	waitDialing(t, f)
 
 	// A different project is not blocked by the slow one.
 	other := &fakeDialer{}
@@ -100,7 +124,7 @@ func TestMCPConnector_ConcurrentFirstConnectDialsOnce(t *testing.T) {
 	select {
 	case err := <-done:
 		require.NoError(t, err)
-	case <-time.After(time.Second):
+	case <-time.After(mcpWait):
 		t.Fatal("a slow connect to one project blocked another project")
 	}
 
@@ -126,7 +150,7 @@ func TestMCPConnector_ReconnectsAfterStreamDies(t *testing.T) {
 	require.Eventually(t, func() bool {
 		_, _, err := m.Connect(t.Context(), dir)
 		return err == nil && f.calls.Load() == 2
-	}, time.Second, 5*time.Millisecond)
+	}, mcpWait, 5*time.Millisecond)
 	require.EqualValues(t, 1, f.cleanups.Load(), "the dead connection is released")
 	m.Close()
 }
@@ -151,11 +175,11 @@ func TestMCPConnector_ErrorsAreNotCached(t *testing.T) {
 func TestMCPConnector_WaitingCallerHonorsContext(t *testing.T) {
 	t.Parallel()
 
-	f := &fakeDialer{gate: make(chan struct{})}
+	f := newGatedDialer()
 	m := newTestConnector(f)
 	dir := t.TempDir()
 	go func() { _, _, _ = m.Connect(t.Context(), dir) }()
-	require.Eventually(t, func() bool { return f.calls.Load() == 1 }, time.Second, 5*time.Millisecond)
+	waitDialing(t, f)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -177,14 +201,14 @@ func TestMCPCmdFlags(t *testing.T) {
 func TestMCPConnector_CloseDuringDialReleasesConnection(t *testing.T) {
 	t.Parallel()
 
-	f := &fakeDialer{gate: make(chan struct{})}
+	f := newGatedDialer()
 	m := newTestConnector(f)
 	errc := make(chan error, 1)
 	go func() {
 		_, _, err := m.Connect(t.Context(), t.TempDir())
 		errc <- err
 	}()
-	require.Eventually(t, func() bool { return f.calls.Load() == 1 }, time.Second, 5*time.Millisecond)
+	waitDialing(t, f)
 
 	m.Close()
 	close(f.gate)
