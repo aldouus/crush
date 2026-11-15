@@ -169,6 +169,37 @@ func TestUpdate_TerminalUpdatesFlushSynchronously(t *testing.T) {
 	require.True(t, got.IsFinished())
 }
 
+func TestUpdate_PublishesTheRowsUpdatedAt(t *testing.T) {
+	t.Parallel()
+
+	svc, sessionID := newTestService(t, WithDebounce(0))
+
+	subCtx, cancelSub := context.WithCancel(t.Context())
+	defer cancelSub()
+	sub := svc.Subscribe(subCtx)
+	collector := collect(subCtx, sub)
+
+	msg, err := svc.Create(t.Context(), sessionID, CreateMessageParams{Role: Assistant})
+	require.NoError(t, err)
+	// Push the in-memory copy into the past: the published update must
+	// carry the row's fresh stamp, not this one.
+	msg.UpdatedAt -= 3600
+	time.Sleep(5 * time.Millisecond)
+	collector.reset()
+
+	msg.AppendContent("hello")
+	require.NoError(t, svc.Update(t.Context(), msg))
+
+	require.Eventually(t, func() bool {
+		return len(collector.snapshot()) >= 1
+	}, time.Second, 5*time.Millisecond)
+	published := collector.snapshot()[0].Payload
+	got, err := svc.Get(t.Context(), msg.ID)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, published.UpdatedAt, got.UpdatedAt)
+	require.Greater(t, published.UpdatedAt, msg.UpdatedAt)
+}
+
 func TestUpdate_ToolCallStructuralChangeFlushes(t *testing.T) {
 	t.Parallel()
 
