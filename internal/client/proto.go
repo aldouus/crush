@@ -913,9 +913,10 @@ func (c *Client) UnarchiveSession(ctx context.Context, id, root, sessionID strin
 	return checkResponse(rsp, err, "unarchive session")
 }
 
-// ListArchivedSessions retrieves archived sessions for a workspace.
-func (c *Client) ListArchivedSessions(ctx context.Context, id string) ([]proto.Session, error) {
-	rsp, err := c.get(ctx, fmt.Sprintf("/workspaces/%s/sessions/archived", id), nil, nil)
+// ListArchivedSessions retrieves archived sessions for a workspace. When
+// id is empty the request is routed to the detached workspace at root.
+func (c *Client) ListArchivedSessions(ctx context.Context, id, root string) ([]proto.Session, error) {
+	rsp, err := c.get(ctx, fmt.Sprintf("/workspaces/%s/sessions/archived", workspacePathID(id)), rootQuery(root), nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list archived sessions: %w", err)
 	}

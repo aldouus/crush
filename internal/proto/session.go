@@ -25,8 +25,11 @@ type Session struct {
 	Todos            []Todo  `json:"todos,omitempty"`
 	CreatedAt        int64   `json:"created_at"`
 	UpdatedAt        int64   `json:"updated_at"`
-	IsBusy           bool    `json:"is_busy"`
-	AttachedClients  int     `json:"attached_clients"`
+	// ArchivedAt is the unix time (seconds) the session was archived;
+	// zero (omitted) for active sessions.
+	ArchivedAt      int64 `json:"archived_at,omitempty"`
+	IsBusy          bool  `json:"is_busy"`
+	AttachedClients int   `json:"attached_clients"`
 	// Color and Animal are the session's swarm identity (see
 	// [session.Session.Color] / .Animal). Empty when the session
 	// has not yet been backfilled; UI code should fall back to no

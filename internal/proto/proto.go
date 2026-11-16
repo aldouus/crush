@@ -609,8 +609,9 @@ type SessionBundle struct {
 
 // Session batch operations.
 const (
-	SessionBatchArchive = "archive"
-	SessionBatchSeen    = "seen"
+	SessionBatchArchive   = "archive"
+	SessionBatchUnarchive = "unarchive"
+	SessionBatchSeen      = "seen"
 )
 
 // SessionBatchTarget is one session for a batch operation, addressed by
@@ -621,7 +622,8 @@ type SessionBatchTarget struct {
 	SessionID   string `json:"session_id"`
 }
 
-// SessionBatchRequest applies Op to every target.
+// SessionBatchRequest applies Op (one of "archive", "unarchive", or
+// "seen") to every target.
 type SessionBatchRequest struct {
 	Op      string               `json:"op"`
 	Targets []SessionBatchTarget `json:"targets"`
