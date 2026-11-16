@@ -5065,10 +5065,16 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Workspace ID",
+                        "description": "Workspace ID (use \\",
                         "name": "id",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Workspace root, used to resolve a detached workspace",
+                        "name": "root",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -5947,7 +5953,7 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Workspace ID",
+                        "description": "Workspace ID (use \\",
                         "name": "id",
                         "in": "path",
                         "required": true
@@ -5958,6 +5964,12 @@ const docTemplate = `{
                         "name": "sid",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Workspace root, used to resolve a detached workspace",
+                        "name": "root",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -8672,6 +8684,10 @@ const docTemplate = `{
                 "animal": {
                     "type": "string"
                 },
+                "archived_at": {
+                    "description": "ArchivedAt is the unix time (seconds) the session was archived;\nzero (omitted) for active sessions.",
+                    "type": "integer"
+                },
                 "attached_clients": {
                     "type": "integer"
                 },
@@ -9833,6 +9849,10 @@ const docTemplate = `{
             "properties": {
                 "animal": {
                     "type": "string"
+                },
+                "archived_at": {
+                    "description": "ArchivedAt is the unix time (seconds) the session was archived;\nzero (omitted) for active sessions.",
+                    "type": "integer"
                 },
                 "attached_clients": {
                     "type": "integer"

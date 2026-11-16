@@ -42,21 +42,22 @@ var sessionCmd = &cobra.Command{
 }
 
 var (
-	sessionListJSON   bool
-	sessionListAll    bool
-	sessionShowJSON   bool
-	sessionLastJSON   bool
-	sessionDeleteJSON bool
-	sessionRenameJSON bool
-	sessionImportJSON bool
-	sessionImportFrom string
+	sessionListJSON     bool
+	sessionListAll      bool
+	sessionListArchived bool
+	sessionShowJSON     bool
+	sessionLastJSON     bool
+	sessionDeleteJSON   bool
+	sessionRenameJSON   bool
+	sessionImportJSON   bool
+	sessionImportFrom   string
 )
 
 var sessionListCmd = &cobra.Command{
 	Use:     "list",
 	Aliases: []string{"ls"},
 	Short:   "List all sessions",
-	Long:    "List sessions for the current project. Use --all to list sessions across every known project, and --json for machine-readable output.",
+	Long:    "List sessions for the current project. Use --all to list sessions across every known project, --archived to list archived sessions instead of active ones, and --json for machine-readable output.",
 	RunE:    runSessionList,
 }
 
@@ -103,6 +104,7 @@ var sessionImportCmd = &cobra.Command{
 func init() {
 	sessionListCmd.Flags().BoolVar(&sessionListJSON, "json", false, "output in JSON format")
 	sessionListCmd.Flags().BoolVarP(&sessionListAll, "all", "a", false, "list sessions across all known projects")
+	sessionListCmd.Flags().BoolVar(&sessionListArchived, "archived", false, "list archived sessions instead of active ones")
 	sessionShowCmd.Flags().BoolVar(&sessionShowJSON, "json", false, "output in JSON format")
 	sessionLastCmd.Flags().BoolVar(&sessionLastJSON, "json", false, "output in JSON format")
 	sessionDeleteCmd.Flags().BoolVar(&sessionDeleteJSON, "json", false, "output in JSON format")
@@ -206,7 +208,7 @@ func runSessionList(cmd *cobra.Command, _ []string) error {
 	if sessionListAll {
 		ctx = cmd.Context()
 		var err error
-		list, err = collectAllSessions(ctx, cmd.ErrOrStderr())
+		list, err = collectAllSessions(ctx, cmd.ErrOrStderr(), sessionListArchived)
 		if err != nil {
 			return err
 		}
@@ -222,7 +224,7 @@ func runSessionList(cmd *cobra.Command, _ []string) error {
 		}
 		defer cleanup()
 
-		sessions, err := svc.sessions.List(ctx)
+		sessions, err := listSessions(ctx, svc.sessions, sessionListArchived)
 		if err != nil {
 			return fmt.Errorf("failed to list sessions: %w", err)
 		}
@@ -291,6 +293,9 @@ func writeSessionListJSON(out io.Writer, list []listedSession) error {
 			Created:  time.Unix(s.CreatedAt, 0).Format(time.RFC3339),
 			Modified: time.Unix(s.UpdatedAt, 0).Format(time.RFC3339),
 		}
+		if s.ArchivedAt != 0 {
+			output[i].Archived = time.Unix(s.ArchivedAt, 0).Format(time.RFC3339)
+		}
 	}
 	enc := json.NewEncoder(out)
 	enc.SetEscapeHTML(false)
@@ -301,7 +306,9 @@ func writeSessionListJSON(out io.Writer, list []listedSession) error {
 // registry, opening each project's database read-only. Projects whose
 // database is missing are skipped; unreadable ones produce a warning on
 // errOut. Results are sorted by most recently updated first.
-func collectAllSessions(ctx context.Context, errOut io.Writer) ([]listedSession, error) {
+//
+// When archived is set, archived sessions are listed instead of active ones.
+func collectAllSessions(ctx context.Context, errOut io.Writer, archived bool) ([]listedSession, error) {
 	known, err := projects.List()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load projects: %w", err)
@@ -319,7 +326,7 @@ func collectAllSessions(ctx context.Context, errOut io.Writer) ([]listedSession,
 		}
 		seen[key] = true
 
-		sessions, err := listProjectSessions(ctx, p.DataDir)
+		sessions, err := listProjectSessions(ctx, p.DataDir, archived)
 		if err != nil {
 			fmt.Fprintf(errOut, "Warning: skipping %s: %v\n", p.Path, err)
 			continue
@@ -335,7 +342,7 @@ func collectAllSessions(ctx context.Context, errOut io.Writer) ([]listedSession,
 	return list, nil
 }
 
-func listProjectSessions(ctx context.Context, dataDir string) ([]session.Session, error) {
+func listProjectSessions(ctx context.Context, dataDir string, archived bool) ([]session.Session, error) {
 	conn, err := db.OpenReadOnly(dataDir)
 	if err != nil {
 		return nil, err
@@ -344,7 +351,15 @@ func listProjectSessions(ctx context.Context, dataDir string) ([]session.Session
 		return nil, nil
 	}
 	defer conn.Close()
-	return session.NewService(db.New(conn), conn).List(ctx)
+	return listSessions(ctx, session.NewService(db.New(conn), conn), archived)
+}
+
+// listSessions lists active sessions, or archived ones when archived is set.
+func listSessions(ctx context.Context, svc session.Service, archived bool) ([]session.Session, error) {
+	if archived {
+		return svc.ListArchived(ctx)
+	}
+	return svc.List(ctx)
 }
 
 type sessionJSON struct {
@@ -354,6 +369,7 @@ type sessionJSON struct {
 	Project  string `json:"project,omitempty"`
 	Created  string `json:"created"`
 	Modified string `json:"modified"`
+	Archived string `json:"archived,omitempty"`
 }
 
 type sessionMutationResult struct {
@@ -362,19 +378,84 @@ type sessionMutationResult struct {
 	Title   string `json:"title"`
 	Deleted bool   `json:"deleted,omitempty"`
 	Renamed bool   `json:"renamed,omitempty"`
+	// Archived and Unarchived report archive state changes.
+	Archived   bool `json:"archived,omitempty"`
+	Unarchived bool `json:"unarchived,omitempty"`
+}
+
+// sessionScope selects which sessions [resolveSessionIDIn] considers.
+type sessionScope int
+
+const (
+	// sessionScopeAny matches active and archived sessions.
+	sessionScopeAny sessionScope = iota
+	// sessionScopeActive matches only sessions that are not archived.
+	sessionScopeActive
+	// sessionScopeArchived matches only archived sessions.
+	sessionScopeArchived
+)
+
+func (scope sessionScope) includes(sess session.Session) bool {
+	switch scope {
+	case sessionScopeActive:
+		return sess.ArchivedAt == 0
+	case sessionScopeArchived:
+		return sess.ArchivedAt != 0
+	default:
+		return true
+	}
+}
+
+func (scope sessionScope) candidates(ctx context.Context, svc session.Service) ([]session.Session, error) {
+	var out []session.Session
+	if scope != sessionScopeArchived {
+		active, err := svc.List(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, active...)
+	}
+	if scope != sessionScopeActive {
+		archived, err := svc.ListArchived(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, archived...)
+	}
+	return out, nil
+}
+
+func (scope sessionScope) notFound(id string) error {
+	switch scope {
+	case sessionScopeActive:
+		return fmt.Errorf("active session not found: %s", id)
+	case sessionScopeArchived:
+		return fmt.Errorf("archived session not found: %s", id)
+	default:
+		return fmt.Errorf("session not found: %s", id)
+	}
 }
 
 // resolveSessionID resolves a session ID that can be a UUID, UUID prefix,
-// full hash, or hash prefix.
+// full hash, or hash prefix, searching both active and archived sessions.
 // Returns an error if the prefix is ambiguous (matches multiple sessions).
 func resolveSessionID(ctx context.Context, svc session.Service, id string) (session.Session, error) {
+	return resolveSessionIDIn(ctx, svc, id, sessionScopeAny)
+}
+
+// resolveSessionIDIn is [resolveSessionID] restricted to the sessions
+// selected by scope.
+func resolveSessionIDIn(ctx context.Context, svc session.Service, id string, scope sessionScope) (session.Session, error) {
 	// Try direct UUID lookup first
 	if s, err := svc.Get(ctx, id); err == nil {
+		if !scope.includes(s) {
+			return session.Session{}, scope.notFound(id)
+		}
 		return s, nil
 	}
 
-	// List all sessions and check for hash matches
-	sessions, err := svc.List(ctx)
+	// List candidate sessions and check for hash matches
+	sessions, err := scope.candidates(ctx, svc)
 	if err != nil {
 		return session.Session{}, err
 	}
@@ -387,7 +468,7 @@ func resolveSessionID(ctx context.Context, svc session.Service, id string) (sess
 	}
 
 	if len(matches) == 0 {
-		return session.Session{}, fmt.Errorf("session not found: %s", id)
+		return session.Session{}, scope.notFound(id)
 	}
 
 	if len(matches) == 1 {

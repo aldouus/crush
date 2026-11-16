@@ -359,14 +359,17 @@ func (b *Backend) UnarchiveSession(ctx context.Context, workspaceID, root, sessi
 	})
 }
 
-// ListArchivedSessions returns archived sessions for a workspace.
-func (b *Backend) ListArchivedSessions(ctx context.Context, workspaceID string) ([]session.Session, error) {
-	ws, err := b.GetWorkspace(workspaceID)
-	if err != nil {
-		return nil, err
-	}
-
-	return ws.Sessions.ListArchived(ctx)
+// ListArchivedSessions returns archived sessions for a workspace. The
+// workspace may be attached or detached (resolved by root via the
+// registry); see [Backend.withWorkspaceSession].
+func (b *Backend) ListArchivedSessions(ctx context.Context, workspaceID, root string) ([]session.Session, error) {
+	var sessions []session.Session
+	err := b.withWorkspaceSession(workspaceID, root, func(_ *Workspace, s session.Service) error {
+		var err error
+		sessions, err = s.ListArchived(ctx)
+		return err
+	})
+	return sessions, err
 }
 
 // ListUserMessages returns user-role messages for a session.
@@ -442,7 +445,7 @@ func (b *Backend) SearchHistory(ctx context.Context, workspaceID string, params 
 	return res, nil
 }
 
-// SessionBatch applies op ("archive" or "seen") to every target and
+// SessionBatch applies op ("archive", "unarchive" or "seen") to every target and
 // reports failures by session ID. It saves a round trip per session for
 // bulk sidebar actions on remote nodes.
 func (b *Backend) SessionBatch(ctx context.Context, op string, targets []proto.SessionBatchTarget) (map[string]string, error) {
@@ -450,6 +453,8 @@ func (b *Backend) SessionBatch(ctx context.Context, op string, targets []proto.S
 	switch op {
 	case proto.SessionBatchArchive:
 		apply = b.ArchiveSession
+	case proto.SessionBatchUnarchive:
+		apply = b.UnarchiveSession
 	case proto.SessionBatchSeen:
 		apply = b.MarkSessionSeen
 	default:

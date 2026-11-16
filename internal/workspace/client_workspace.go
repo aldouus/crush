@@ -271,7 +271,7 @@ func (w *ClientWorkspace) SetSessionFavoriteInWorkspace(ctx context.Context, wor
 }
 
 func (w *ClientWorkspace) ListArchivedSessions(ctx context.Context) ([]session.Session, error) {
-	protoSessions, err := w.c().ListArchivedSessions(ctx, w.workspaceID())
+	protoSessions, err := w.c().ListArchivedSessions(ctx, w.workspaceID(), "")
 	if err != nil {
 		return nil, err
 	}
@@ -1874,6 +1874,7 @@ func protoToSession(s proto.Session) session.Session {
 		Cost:             s.Cost,
 		CreatedAt:        s.CreatedAt,
 		UpdatedAt:        s.UpdatedAt,
+		ArchivedAt:       s.ArchivedAt,
 		Color:            s.Color,
 		Animal:           s.Animal,
 		ModelRef:         s.ModelRef,
@@ -1986,6 +1987,7 @@ func sessionToProto(s session.Session) proto.Session {
 		Cost:             s.Cost,
 		CreatedAt:        s.CreatedAt,
 		UpdatedAt:        s.UpdatedAt,
+		ArchivedAt:       s.ArchivedAt,
 		Color:            s.Color,
 		Animal:           s.Animal,
 		ModelRef:         s.ModelRef,

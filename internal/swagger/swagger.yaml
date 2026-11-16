@@ -1382,6 +1382,11 @@ definitions:
     properties:
       animal:
         type: string
+      archived_at:
+        description: |-
+          ArchivedAt is the unix time (seconds) the session was archived;
+          zero (omitted) for active sessions.
+        type: integer
       attached_clients:
         type: integer
       color:
@@ -2204,6 +2209,11 @@ definitions:
     properties:
       animal:
         type: string
+      archived_at:
+        description: |-
+          ArchivedAt is the unix time (seconds) the session was archived;
+          zero (omitted) for active sessions.
+        type: integer
       attached_clients:
         type: integer
       color:
@@ -6673,7 +6683,7 @@ paths:
   /workspaces/{id}/sessions/{sid}/unarchive:
     post:
       parameters:
-      - description: Workspace ID
+      - description: Workspace ID (use \
         in: path
         name: id
         required: true
@@ -6682,6 +6692,10 @@ paths:
         in: path
         name: sid
         required: true
+        type: string
+      - description: Workspace root, used to resolve a detached workspace
+        in: query
+        name: root
         type: string
       responses:
         "200":
@@ -6843,10 +6857,14 @@ paths:
   /workspaces/{id}/sessions/archived:
     get:
       parameters:
-      - description: Workspace ID
+      - description: Workspace ID (use \
         in: path
         name: id
         required: true
+        type: string
+      - description: Workspace root, used to resolve a detached workspace
+        in: query
+        name: root
         type: string
       produces:
       - application/json

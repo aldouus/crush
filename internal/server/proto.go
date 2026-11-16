@@ -886,8 +886,9 @@ func (c *controllerV1) handleSetWorkspaceSessionFavorite(w http.ResponseWriter, 
 //
 //	@Summary		Unarchive a session
 //	@Tags			sessions
-//	@Param			id	path	string	true	"Workspace ID"
-//	@Param			sid	path	string	true	"Session ID"
+//	@Param			id		path	string	true	"Workspace ID (use \"-\" with root for a detached workspace)"
+//	@Param			sid		path	string	true	"Session ID"
+//	@Param			root	query	string	false	"Workspace root, used to resolve a detached workspace"
 //	@Success		200
 //	@Failure		404	{object}	proto.Error
 //	@Failure		500	{object}	proto.Error
@@ -909,16 +910,26 @@ func (c *controllerV1) handleUnarchiveWorkspaceSession(w http.ResponseWriter, r 
 //	@Summary		List archived sessions
 //	@Tags			sessions
 //	@Produce		json
-//	@Param			id	path		string			true	"Workspace ID"
-//	@Success		200	{array}		proto.Session
-//	@Failure		404	{object}	proto.Error
-//	@Failure		500	{object}	proto.Error
+//	@Param			id		path		string	true	"Workspace ID (use \"-\" with root for a detached workspace)"
+//	@Param			root	query		string	false	"Workspace root, used to resolve a detached workspace"
+//	@Success		200		{array}		proto.Session
+//	@Failure		404		{object}	proto.Error
+//	@Failure		500		{object}	proto.Error
 //	@x-crush-scope	"sessions:read"
 //	@Router			/workspaces/{id}/sessions/archived [get]
 func (c *controllerV1) handleGetWorkspaceArchivedSessions(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	sessions, err := c.backend.ListArchivedSessions(r.Context(), id)
-	c.respond(w, r, sessions, err)
+	root := r.URL.Query().Get("root")
+	sessions, err := c.backend.ListArchivedSessions(r.Context(), id, root)
+	if err != nil {
+		c.handleError(w, r, err)
+		return
+	}
+	out := make([]proto.Session, len(sessions))
+	for i, s := range sessions {
+		out[i] = sessionToProto(s)
+	}
+	jsonEncode(w, out)
 }
 
 // handleGetWorkspaceSessionUserMessages returns user messages for a session.
@@ -2026,7 +2037,8 @@ func (c *controllerV1) handlePostSessionBundle(w http.ResponseWriter, r *http.Re
 	})
 }
 
-// handlePostSessionBatch archives or marks read many sessions at once.
+// handlePostSessionBatch archives, unarchives, or marks read many sessions
+// at once. Op is one of "archive", "unarchive", or "seen".
 //
 //	@Summary		Apply an operation to many sessions
 //	@Tags			sessions
