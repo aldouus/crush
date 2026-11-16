@@ -69,7 +69,7 @@ func TestSessionListAllEmptyRegistry(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	var errOut bytes.Buffer
-	list, err := collectAllSessions(t.Context(), &errOut)
+	list, err := collectAllSessions(t.Context(), &errOut, false)
 	require.NoError(t, err)
 	require.Empty(t, list)
 	require.Empty(t, errOut.String())
@@ -91,7 +91,7 @@ func TestSessionListAllReadsWorkspaceRegistry(t *testing.T) {
 	require.NoError(t, registry.New().Add(registry.Entry{Root: project, DataDir: dataDir, LastUsed: 1}))
 
 	var errOut bytes.Buffer
-	list, err := collectAllSessions(t.Context(), &errOut)
+	list, err := collectAllSessions(t.Context(), &errOut, false)
 	require.NoError(t, err)
 	require.Empty(t, errOut.String())
 	require.Len(t, list, 1)

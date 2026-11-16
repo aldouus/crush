@@ -797,6 +797,22 @@ crush session list --all
 crush session list --all --json
 ```
 
+### Archiving Sessions
+
+Archived sessions are hidden from the session list but kept on disk. Archive
+or restore one or more sessions by UUID, UUID prefix, hash, or hash prefix,
+and list archived sessions with `--archived` (combinable with `--all` and
+`--json`; JSON rows gain an `archived` timestamp):
+
+```bash
+crush session archive <id...>
+crush session list --archived
+crush session unarchive <id...>
+```
+
+`unarchive` only resolves archived sessions and `archive` only active ones.
+`show`, `delete`, and `rename` resolve both.
+
 ### Importing Sessions
 
 Bring conversations over from other coding agents:
