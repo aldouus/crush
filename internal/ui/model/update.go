@@ -414,7 +414,7 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.handleCancelTimerExpired(msg)
 	case workspaceOverviewsMsg:
 		startuptrace.Mark("overviews_loaded")
-		m.leftSidebar.SetOverviews(msg.overviews)
+		m.leftSidebar.SetOverviews(mergeActiveSession(msg.overviews, m.com.Workspace.BaseDir(), m.session))
 		m.leftSidebar.SetCurrentRoot(m.com.Workspace.BaseDir())
 		if m.session != nil {
 			m.leftSidebar.SetActiveSession(m.session.ID)

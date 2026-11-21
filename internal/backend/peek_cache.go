@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -23,7 +24,13 @@ import (
 type peekCache struct {
 	mu      sync.Mutex
 	entries map[string]peekEntry
-	guard   stallGuard
+	// total is the number of sessions held across entries; tick orders
+	// entries by last use for eviction once total exceeds the cap.
+	total int
+	tick  uint64
+	// maxSessions caps total; zero means [defaultPeekCacheSessions].
+	maxSessions int
+	guard       stallGuard
 	// peek lists a data directory's sessions; nil means [db.PeekSessions].
 	peek func(ctx context.Context, dataDir string) ([]db.PeekedSession, error)
 }
@@ -35,12 +42,20 @@ type peekEntry struct {
 	// once per stamp. Shared by every caller: read-only.
 	overviews []proto.SessionOverview
 	at        time.Time
+	used      uint64
 }
 
+// defaultPeekCacheSessions bounds how many sessions the peek cache holds
+// across all workspaces (roughly 0.5 KiB each), evicting least recently
+// used workspaces beyond it.
+const defaultPeekCacheSessions = 2_000_000
+
 // dbStamp fingerprints a data directory's database files; any write
-// changes the WAL or the main file.
+// changes the WAL or the main file. The shared-memory WAL index header
+// (change counter, last frame, salts) is included too, so a WAL rewritten
+// from its start at the same size is caught even where mtimes are coarse.
 func dbStamp(dataDir string) string {
-	var stamp string
+	stamp := shmHeader(dataDir)
 	for _, name := range []string{"crush.db", "crush.db-wal"} {
 		fi, err := os.Stat(filepath.Join(dataDir, name))
 		if err != nil {
@@ -87,6 +102,9 @@ func (c *peekCache) loadEntry(ctx context.Context, dataDir string) (peekEntry, e
 	stamp := dbStamp(dataDir)
 	c.mu.Lock()
 	if e, ok := c.entries[dataDir]; ok && e.stamp == stamp {
+		c.tick++
+		e.used = c.tick
+		c.entries[dataDir] = e
 		c.mu.Unlock()
 		return e, nil
 	}
@@ -104,7 +122,7 @@ func (c *peekCache) loadEntry(ctx context.Context, dataDir string) (peekEntry, e
 	if c.entries == nil {
 		c.entries = map[string]peekEntry{}
 	}
-	c.entries[dataDir] = e
+	c.put(dataDir, e)
 	c.mu.Unlock()
 	return e, nil
 }
@@ -138,5 +156,46 @@ func peekedOverviews(peeked []db.PeekedSession) []proto.SessionOverview {
 func (c *peekCache) reset() {
 	c.mu.Lock()
 	c.entries = nil
+	c.total = 0
 	c.mu.Unlock()
+}
+
+// shmHeader returns the first WAL index header of crush.db-shm, or "" when
+// there is none. A torn read only costs a spurious reload.
+func shmHeader(dataDir string) string {
+	f, err := os.Open(filepath.Join(dataDir, "crush.db-shm"))
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	var hdr [48]byte
+	n, _ := io.ReadFull(f, hdr[:])
+	return "shm:" + string(hdr[:n]) + ";"
+}
+
+// put stores e under dataDir and evicts least recently used entries while
+// the cache holds more sessions than its cap. The newest entry is always
+// kept. Callers hold c.mu.
+func (c *peekCache) put(dataDir string, e peekEntry) {
+	if prev, ok := c.entries[dataDir]; ok {
+		c.total -= len(prev.sessions)
+	}
+	c.tick++
+	e.used = c.tick
+	c.entries[dataDir] = e
+	c.total += len(e.sessions)
+	limit := c.maxSessions
+	if limit <= 0 {
+		limit = defaultPeekCacheSessions
+	}
+	for c.total > limit && len(c.entries) > 1 {
+		victim, oldest := "", uint64(0)
+		for k, v := range c.entries {
+			if k != dataDir && (victim == "" || v.used < oldest) {
+				victim, oldest = k, v.used
+			}
+		}
+		c.total -= len(c.entries[victim].sessions)
+		delete(c.entries, victim)
+	}
 }

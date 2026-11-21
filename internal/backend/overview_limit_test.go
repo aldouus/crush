@@ -29,3 +29,18 @@ func TestLimitOverviews(t *testing.T) {
 	require.Len(t, got[1].Sessions, 2)
 	require.Zero(t, got[1].SessionCount)
 }
+
+func TestLimitOverviewsKeepsBusy(t *testing.T) {
+	t.Parallel()
+	sessions := make([]proto.SessionOverview, 6)
+	for i := range sessions {
+		sessions[i].ID = string(rune('a' + i))
+		sessions[i].IsBusy = i < 4
+	}
+	got := limitOverviews([]proto.WorkspaceOverview{{Root: "/a", Sessions: sessions}}, 2)
+	require.Len(t, got[0].Sessions, 4)
+	require.Equal(t, 6, got[0].SessionCount)
+	for _, s := range got[0].Sessions {
+		require.True(t, s.IsBusy)
+	}
+}

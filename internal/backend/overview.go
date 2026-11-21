@@ -46,15 +46,21 @@ func (b *Backend) ListWorkspaceOverviewsLimit(ctx context.Context, limit int) ([
 }
 
 // limitOverviews truncates each workspace's sessions to limit, recording
-// the original count. Sessions must already be in display order.
+// the original count. Sessions must already be in display order. Busy
+// sessions (running agent or pending permission) sort first and are never
+// cut, so live work always reaches the sidebar.
 func limitOverviews(ovs []proto.WorkspaceOverview, limit int) []proto.WorkspaceOverview {
 	if limit <= 0 {
 		return ovs
 	}
 	for i := range ovs {
-		if n := len(ovs[i].Sessions); n > limit {
+		keep := limit
+		for keep < len(ovs[i].Sessions) && ovs[i].Sessions[keep].IsBusy {
+			keep++
+		}
+		if n := len(ovs[i].Sessions); n > keep {
 			ovs[i].SessionCount = max(ovs[i].SessionCount, n)
-			ovs[i].Sessions = slices.Clip(ovs[i].Sessions[:limit])
+			ovs[i].Sessions = slices.Clip(ovs[i].Sessions[:keep])
 		}
 	}
 	return ovs

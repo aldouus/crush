@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"image"
+	"path/filepath"
+	"slices"
 
 	"charm.land/bubbles/v2/key"
 
@@ -11,6 +13,7 @@ import (
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/taigrr/crush/internal/config"
 	"github.com/taigrr/crush/internal/proto"
+	"github.com/taigrr/crush/internal/session"
 	"github.com/taigrr/crush/internal/startuptrace"
 	"github.com/taigrr/crush/internal/ui/dialog"
 	"github.com/taigrr/crush/internal/ui/util"
@@ -677,5 +680,46 @@ func batchTargets(targets []SessionTarget) []workspace.BatchTarget {
 	for i, t := range targets {
 		out[i] = workspace.BatchTarget{WorkspaceID: t.WorkspaceID, Root: t.Root, SessionID: t.ID}
 	}
+	return out
+}
+
+// mergeActiveSession makes sure the open session is listed under its
+// workspace even when a bounded overview cut it off, so the sidebar can
+// always mark it. The overviews are copied before modification.
+func mergeActiveSession(ovs []proto.WorkspaceOverview, root string, sess *session.Session) []proto.WorkspaceOverview {
+	if sess == nil || sess.ID == "" || sess.ParentSessionID != "" {
+		return ovs
+	}
+	target := -1
+	resolved := root
+	if r, err := filepath.EvalSymlinks(root); err == nil {
+		resolved = r
+	}
+	for i, ov := range ovs {
+		for _, s := range ov.Sessions {
+			if s.ID == sess.ID {
+				return ovs
+			}
+		}
+		if target < 0 && (ov.Root == root || ov.Root == resolved) {
+			target = i
+		}
+	}
+	if target < 0 {
+		return ovs
+	}
+	out := slices.Clone(ovs)
+	ov := &out[target]
+	ov.Sessions = append(slices.Clip(ov.Sessions), proto.SessionOverview{
+		ID:         sess.ID,
+		Title:      sess.Title,
+		WorkingDir: sess.WorkingDir,
+		UpdatedAt:  sess.UpdatedAt,
+		Unread:     sess.Unread(),
+		Color:      sess.Color,
+		Animal:     sess.Animal,
+		Favorite:   sess.Favorite,
+		OwnerNode:  sess.OwnerNode,
+	})
 	return out
 }

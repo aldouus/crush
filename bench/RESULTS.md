@@ -28,6 +28,7 @@
 | 34 | Bounded peek fan-out + stale fallback, cached sorted overviews, in-memory registry | TUI ready ms (reuse, 10x200 / 100x2000 / 100x5000 / 300x2000 / 300x5000); unavailable @300x5000 | 190 / 376 / 1151 / 651 / 4005; 215 unavailable | 187 / 275 / 370 / 399 / 1656; 0 unavailable | -1% (ns) / -27% / -68% / -39% / -59% | KEPT |
 | 35 | LRU prompt-input / gitignore caches, caps 256/128 -> 1024 (scale fix 7, partial) | 300-workspace round-robin cycle: ns/op, hit% | prompt 23.5 us, 72.8% hit; ignore 906 us, 248 allocs | prompt 239 ns, 100% hit; ignore 176 us, 71 allocs | -99% / -81% (p=0.000) | KEPT |
 | 36 | Lazy owner lookup in replica delta Serve (scale fix 6, partial) | ServeDelta no-change poll (200 / 2000 / 5000 sessions) | 483 us / 2.92 ms / 6.87 ms | 175 us / 179 us / 178 us | -64% / -94% / -97% (p=0.000) | KEPT |
+| 37 | Active/busy session always in bounded overview, WAL-safe peek stamp, LRU-bounded peek cache | correctness (sidebar), 300x5000 ready ms | 1530 +-262 | 631 +-33 (not attributed) | correctness fix | KEPT (correctness) |
 
 ## Attempt 01: Lazy gh/gh-stack probes
 
@@ -1194,3 +1195,71 @@ workspaces (-96..-99.8%, p=0.000); allocs 108..15026 -> 3.
   so ready time is unaffected by this change.
 - **Verdict**: KEPT. go test -race (replica, backend), go vet,
   golangci-lint clean.
+
+## Attempt 37: Active/busy session always visible, WAL invalidation, bounded peek cache
+
+- **Hypothesis / goal**: correctness follow-up to attempts 33/34. A bounded
+  (top-50) overview can drop the open session or a session with a running
+  agent / pending permission from the sidebar; the peek cache must be
+  invalidated by WAL-only writes; the peek cache must not grow without
+  bound.
+- **Change**:
+  - `internal/backend/overview.go`: `limitOverviews` never cuts busy
+    sessions (they sort first; pending permission implies an active turn,
+    so it is busy). Test `TestLimitOverviewsKeepsBusy`.
+  - `internal/ui/model/sessionsidebar_wiring.go`, `update.go`:
+    `mergeActiveSession` appends the open top-level session to its
+    workspace (root or symlink-resolved root) when the bounded list
+    omitted it, copying the input. `SessionCount` (the total) is left
+    alone, so "…N more" drops by one. Test `TestMergeActiveSession`.
+  - `internal/backend/peek_cache.go`: stamp also includes the 48-byte
+    WAL-index header from `crush.db-shm` (change counter, mxFrame,
+    salts), so a WAL rewritten from offset 0 at equal size is caught even
+    on coarse-mtime filesystems. Test `TestPeekCacheInvalidatesOnWALOnlyWrites`
+    (writer keeps its connection open; asserts crush.db is untouched while
+    create/update/delete and a post-TRUNCATE-checkpoint rewrite are all
+    seen). The existing mtime+size stamp already passed it on APFS; the
+    shm header is defense in depth.
+  - Peek cache is now LRU-bounded by total cached sessions (default
+    2,000,000, about 0.5 KiB each, whole-workspace eviction, newest entry
+    always kept). Test `TestPeekCacheEvictsLRU`. 300x5000 (1.5M sessions)
+    fits, so no thrash at any measured point.
+- **Not done (budget, last attempt)**: (2) SQL LIMIT + index, (3)
+  paginated per-workspace sessions endpoint, pre-encoded per-workspace
+  JSON for the unlimited overview (still ~4.3 s at 300x5000).
+- **Measurement**: `startup.py --mode reuse --fixture-root --probe 1`, 10
+  runs per binary, the three binaries back to back on the same fixture
+  per point (`-clone` fixtures on /Volumes/Store1/tmp, deleted after).
+  Load 3.78 3.54 2.89 -> 2.98 2.99 2.87. RSS = `ps -o rss` of the private server pid after the
+  10 attach runs and after 5 full-overview probes (2 samples; macOS RSS is
+  noisy because of memory compression, treat +-30% as noise).
+
+| bin | N ws | M sess | ready ms (med +-sd) | overviews req ms | srv list_overviews ms | full-overview probe ms | full payload MB | sessions (full) | unavailable | server RSS MB (after attach / after probes) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| attempt-32 baseline 9550a3eb | 10 | 200 | 195 +-34 | 22 | 5.9 | 15 | 0.3 | 2000 | 0 | 116/116 |
+| pre-37 HEAD daff1a1e | 10 | 200 | 184 +-5 | 15 | 6.0 | 11 | 0.3 | 2000 | 0 | 112/112 |
+| final (attempt 37) | 10 | 200 | 185 +-13 | 16 | 5.8 | 10 | 0.3 | 2000 | 0 | 112/112 |
+| attempt-32 baseline 9550a3eb | 100 | 2000 | 1207 +-682 | 1038 | 118.1 | 493 | 27.0 | 200000 | 0 | 495/484 |
+| pre-37 HEAD daff1a1e | 100 | 2000 | 259 +-16 | 107 | 32.2 | 417 | 27.0 | 200000 | 0 | 365/475 |
+| final (attempt 37) | 100 | 2000 | 264 +-25 | 112 | 34.1 | 415 | 27.0 | 200000 | 0 | 354/551 |
+| attempt-32 baseline 9550a3eb | 100 | 5000 | 3492 +-787 | 2884 | 386.2 | 1698 | 67.5 | 500000 | 0 | 189/548 |
+| pre-37 HEAD daff1a1e | 100 | 5000 | 389 +-32 | 214 | 69.7 | 1328 | 67.5 | 500000 | 0 | 751/628 |
+| final (attempt 37) | 100 | 5000 | 368 +-29 | 210 | 72.6 | 1267 | 67.5 | 500000 | 0 | 752/550 |
+| attempt-32 baseline 9550a3eb | 300 | 2000 | 4722 +-595 | 4290 | 3072.9 | 1943 | 80.7 | 600000 | 0 | 150/654 |
+| pre-37 HEAD daff1a1e | 300 | 2000 | 400 +-28 | 232 | 39.1 | 1475 | 80.7 | 600000 | 0 | 837/846 |
+| final (attempt 37) | 300 | 2000 | 392 +-25 | 230 | 41.0 | 1799 | 80.7 | 600000 | 0 | 816/820 |
+| attempt-32 baseline 9550a3eb | 300 | 5000 | 4639 +-440 | 4439 | 3117.5 | 4403 | 40.0 | 295000 | 241 | 764/731 |
+| pre-37 HEAD daff1a1e | 300 | 5000 | 1530 +-262 | 925 | 113.2 | 4290 | 202.3 | 1500000 | 0 | 1258/1106 |
+| final (attempt 37) | 300 | 5000 | 631 +-33 | 460 | 75.9 | 4356 | 202.3 | 1500000 | 0 | 1861/913 |
+
+- **RSS (5)/(6)**: at 300x5000 the server holds ~0.9-1.9 GB after the
+  full-overview probes for both HEAD and now vs 0.7 GB at the attempt-32
+  baseline, which had 241/300 workspaces unavailable (so it cached far
+  fewer sessions). The cap bounds the worst case at ~1 GB of peek entries;
+  it does not lower RSS at 300x5000 since everything fits.
+- **Ready time**: 10x200 185 vs 184 ms (no regression). 300x5000 631 vs
+  1530 ms median for this run, but nothing in the change targets that
+  path (no eviction, one extra 48-byte read per workspace), so it is not
+  claimed as a win; likely run-to-run variance in the stale/peek path.
+- **Verdict**: KEPT as correctness fix. go test -race (backend,
+  ui/model), go vet, golangci-lint clean.

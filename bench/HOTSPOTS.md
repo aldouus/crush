@@ -256,6 +256,31 @@ benchmarks in `bench/scale/scale_test.go`. Fixtures in
 `/Volumes/Store1/tmp/crush-scale-*`, deleted after each point (300x5000 =
 3.8 GB, 34 s to generate; nothing skipped). Load avg 1.9-3.2.
 
+### Consolidated: attempt-32 baseline vs final HEAD (attempt 37, back to back, same fixtures)
+
+TUI requests the bounded (50/workspace) overview; probe = unlimited
+`GET /v1/workspace-overviews` (peers/rush). Remaining cost at scale: the
+unlimited overview encode (~4.3 s at 300x5000) and server RSS (~1 GB
+peek cache, now LRU-capped at 2M sessions).
+
+| bin | N ws | M sess | ready ms (med +-sd) | overviews req ms | srv list_overviews ms | full-overview probe ms | full payload MB | sessions (full) | unavailable | server RSS MB (after attach / after probes) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| attempt-32 baseline 9550a3eb | 10 | 200 | 195 +-34 | 22 | 5.9 | 15 | 0.3 | 2000 | 0 | 116/116 |
+| pre-37 HEAD daff1a1e | 10 | 200 | 184 +-5 | 15 | 6.0 | 11 | 0.3 | 2000 | 0 | 112/112 |
+| final (attempt 37) | 10 | 200 | 185 +-13 | 16 | 5.8 | 10 | 0.3 | 2000 | 0 | 112/112 |
+| attempt-32 baseline 9550a3eb | 100 | 2000 | 1207 +-682 | 1038 | 118.1 | 493 | 27.0 | 200000 | 0 | 495/484 |
+| pre-37 HEAD daff1a1e | 100 | 2000 | 259 +-16 | 107 | 32.2 | 417 | 27.0 | 200000 | 0 | 365/475 |
+| final (attempt 37) | 100 | 2000 | 264 +-25 | 112 | 34.1 | 415 | 27.0 | 200000 | 0 | 354/551 |
+| attempt-32 baseline 9550a3eb | 100 | 5000 | 3492 +-787 | 2884 | 386.2 | 1698 | 67.5 | 500000 | 0 | 189/548 |
+| pre-37 HEAD daff1a1e | 100 | 5000 | 389 +-32 | 214 | 69.7 | 1328 | 67.5 | 500000 | 0 | 751/628 |
+| final (attempt 37) | 100 | 5000 | 368 +-29 | 210 | 72.6 | 1267 | 67.5 | 500000 | 0 | 752/550 |
+| attempt-32 baseline 9550a3eb | 300 | 2000 | 4722 +-595 | 4290 | 3072.9 | 1943 | 80.7 | 600000 | 0 | 150/654 |
+| pre-37 HEAD daff1a1e | 300 | 2000 | 400 +-28 | 232 | 39.1 | 1475 | 80.7 | 600000 | 0 | 837/846 |
+| final (attempt 37) | 300 | 2000 | 392 +-25 | 230 | 41.0 | 1799 | 80.7 | 600000 | 0 | 816/820 |
+| attempt-32 baseline 9550a3eb | 300 | 5000 | 4639 +-440 | 4439 | 3117.5 | 4403 | 40.0 | 295000 | 241 | 764/731 |
+| pre-37 HEAD daff1a1e | 300 | 5000 | 1530 +-262 | 925 | 113.2 | 4290 | 202.3 | 1500000 | 0 | 1258/1106 |
+| final (attempt 37) | 300 | 5000 | 631 +-33 | 460 | 75.9 | 4356 | 202.3 | 1500000 | 0 | 1861/913 |
+
 ### 1/2/4. TUI attach ready, overview fetch, payload, server RSS (10 runs, target = ws0000)
 
 "ready" = overviews loaded into the sidebar. first_frame stayed ~175-180 ms
