@@ -147,3 +147,26 @@
 - **Verdict**: KEPT. Note the benchmark re-renders the same diff, so it
   measures the warm (re-render) path; first render of a new diff is unchanged.
   Output is byte-identical (same lexer/formatter, cached per exact input).
+
+## Attempt 06: pre-rendered line-number gutter affixes in diffview
+
+- **Hypothesis**: `lipgloss.Style.Render` on fixed-width line-number gutters
+  is a large share of diff CPU. Since the gutter content always has the same
+  cell width, render each LineNumber style once per `String()` around a
+  sentinel of that width and reuse the prefix/suffix, falling back to
+  `Render` for anything not plain single-width.
+- **Change**: `internal/ui/diffview/linenum.go` (new), `style.go`
+  (unexported affix field on `LineStyle`), `diffview.go` (17 call sites),
+  test `TestRenderLineNumberMatchesLipgloss`. Golden tests pass unchanged.
+- **Load avg**: 2.08 (before) / 2.34 (after).
+
+| Benchmark | Before | After | Delta |
+|---|---|---|---|
+| DiffRender/unified time | 88.24 ms | 78.70 ms | -10.80% (p=0.000) |
+| DiffRender/split time | 121.1 ms | 116.5 ms | ~ (p=0.105) |
+| unified B/op, allocs | 11.58 MiB, 314.8k | 11.19 MiB, 301.7k | -3.44%, -4.16% |
+| split B/op, allocs | 18.57 MiB, 533.4k | 18.22 MiB, 521.6k | -1.86%, -2.21% |
+
+- **Verdict**: KEPT. Unified clears the bar; split improves allocs
+  significantly and time is not regressed. The remaining Render cost is the
+  per-line `Code.Width(...)` and content-style wraps, which depend on content.
