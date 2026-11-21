@@ -348,3 +348,27 @@
 
 - **Verdict**: BASELINE (harness only). Hotspots in `bench/HOTSPOTS.md`
   ("Cluster").
+
+## Attempt 13: cache prepared statements in replica Apply
+
+- **Hypothesis**: cluster hotspot #1 is `replica.Apply` (1.33 s full sync
+  of 200 sessions x 10 msgs). Every row runs an unprepared upsert plus an
+  unprepared owner `SELECT`, so sqlite re-prepares the same few SQL
+  strings thousands of times. Preparing each distinct query once per
+  transaction should remove most of that cost with identical semantics.
+- **Change**: `internal/replica/replica.go` (`stmtCache` on the apply tx;
+  `upsert` and the owner lookup go through it; closed with the tx).
+- **Load avg**: 1.68 (start) / 2.73 (end). GOMAXPROCS=4, count=10, raw in
+  `bench/out/attempt13/`.
+
+| Benchmark | Before | After | Delta |
+|---|---|---|---|
+| ReplicaFullSync time/op | 1325.2 ms +-6% | 446.3 ms +-5% | -66.3% (p=0.000) |
+| ReplicaFullSync B/op | 31.16 MiB | 31.78 MiB | +2.0% |
+| ReplicaFullSync allocs/op | 386.9k | 395.6k | +2.2% |
+| ReplicaServeDelta time/op | 482.2 us | 476.1 us | ~ (p=0.393) |
+
+- **Verdict**: KEPT. 3x faster full sync; small alloc increase from
+  statement handles is negligible. Tests pass (`-race` on replica and
+  cluster), vet + lint clean. Next: per-row owner lookups could be cached
+  per session within a batch.

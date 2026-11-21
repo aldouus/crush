@@ -234,9 +234,12 @@ func Apply(ctx context.Context, db *sql.DB, peer string, batch Batch) (Stats, er
 		return st, err
 	}
 
+	stmts := &stmtCache{tx: tx, m: map[string]*sql.Stmt{}}
+	defer stmts.close()
+
 	owner := func(sessionID string) (string, bool) {
 		var o, moved sql.NullString
-		err := tx.QueryRowContext(ctx, `SELECT owner_node, moved_to_node FROM sessions WHERE id = ?`, sessionID).Scan(&o, &moved)
+		err := stmts.queryRow(ctx, `SELECT owner_node, moved_to_node FROM sessions WHERE id = ?`, sessionID).Scan(&o, &moved)
 		if err != nil {
 			return "", false
 		}
@@ -290,7 +293,7 @@ func Apply(ctx context.Context, db *sql.DB, peer string, batch Batch) (Stats, er
 						continue
 					}
 				}
-				changed, err := upsert(ctx, tx, table, c.Row, table == "sessions")
+				changed, err := upsert(ctx, stmts, table, c.Row, table == "sessions")
 				if err != nil {
 					return st, fmt.Errorf("apply %s: %w", table, err)
 				}
@@ -305,7 +308,7 @@ func Apply(ctx context.Context, db *sql.DB, peer string, batch Batch) (Stats, er
 	// Message inserts bump trigger-maintained counters; restore the
 	// owner's values.
 	for _, c := range sessionRows {
-		if _, err := upsert(ctx, tx, "sessions", c.Row, false); err != nil {
+		if _, err := upsert(ctx, stmts, "sessions", c.Row, false); err != nil {
 			return st, err
 		}
 	}
@@ -354,6 +357,49 @@ func deleteIfPeerOwned(ctx context.Context, tx *sql.Tx, c Change, peer string, o
 	return err == nil, err
 }
 
+// stmtCache reuses prepared statements within one transaction so the
+// per-row queries of a batch are prepared once.
+type stmtCache struct {
+	tx *sql.Tx
+	m  map[string]*sql.Stmt
+}
+
+func (c *stmtCache) get(ctx context.Context, q string) (*sql.Stmt, error) {
+	if s, ok := c.m[q]; ok {
+		return s, nil
+	}
+	s, err := c.tx.PrepareContext(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	c.m[q] = s
+	return s, nil
+}
+
+func (c *stmtCache) exec(ctx context.Context, q string, args ...any) (sql.Result, error) {
+	s, err := c.get(ctx, q) //nolint:sqlclosecheck // Closed by stmtCache.close.
+	if err != nil {
+		return nil, err
+	}
+	return s.ExecContext(ctx, args...)
+}
+
+// queryRow falls back to an unprepared query when preparing fails so the
+// error surfaces through Scan as before.
+func (c *stmtCache) queryRow(ctx context.Context, q string, args ...any) *sql.Row {
+	s, err := c.get(ctx, q) //nolint:sqlclosecheck // Closed by stmtCache.close.
+	if err != nil {
+		return c.tx.QueryRowContext(ctx, q, args...)
+	}
+	return s.QueryRowContext(ctx, args...)
+}
+
+func (c *stmtCache) close() {
+	for _, s := range c.m {
+		_ = s.Close()
+	}
+}
+
 func quote(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }
 
 // upsert inserts row or updates the existing row in place. It never uses
@@ -361,7 +407,7 @@ func quote(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"
 // deferRefs, session references to rows not yet applied are cleared.
 // upsert writes row and reports whether anything changed. Identical rows
 // are left alone so update triggers do not fire for them.
-func upsert(ctx context.Context, tx *sql.Tx, table string, row map[string]transfer.Value, deferRefs bool) (bool, error) {
+func upsert(ctx context.Context, stmts *stmtCache, table string, row map[string]transfer.Value, deferRefs bool) (bool, error) {
 	pk := pkColumns[table]
 	names := make([]string, 0, len(row))
 	for c := range row {
@@ -397,7 +443,7 @@ func upsert(ctx context.Context, tx *sql.Tx, table string, row map[string]transf
 		q = fmt.Sprintf(`INSERT INTO %s (%s) VALUES (%s) ON CONFLICT DO NOTHING`,
 			quote(table), strings.Join(quoted, ","), strings.TrimSuffix(strings.Repeat("?,", len(names)), ","))
 	}
-	res, err := tx.ExecContext(ctx, q, args...)
+	res, err := stmts.exec(ctx, q, args...)
 	if err != nil {
 		return false, err
 	}
