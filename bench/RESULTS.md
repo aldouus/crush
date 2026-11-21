@@ -196,3 +196,26 @@
 - **Verdict**: KEPT. Large time and byte win on the full-message path
   (measured under higher load after). Small alloc-count rise is the
   per-event `json.Marshal(type)`; deltas unchanged.
+
+## Attempt 09: single-pass part decoding in message list
+
+- **Hypothesis**: `UnmarshalParts` parses each row's parts JSON twice:
+  first into `[]json.RawMessage` (copying every element), then each element
+  again into a `{type,data}` wrapper. Decoding straight into
+  `[]struct{Type; Data json.RawMessage}` drops one full parse and the
+  per-element copies. No schema/query change needed: the profile showed
+  JSON decoding, not SQLite, dominating crush's own cost.
+- **Change**: `internal/message/message.go` (`UnmarshalParts`). Behavior is
+  unchanged; existing message tests pass.
+- **Load avg**: 2.58 (before) / 4.01 (after).
+
+| Benchmark | Before | After | Delta |
+|---|---|---|---|
+| MessageList/500 time | 16.42 ms | 13.92 ms | ~ (p=0.105, noisy) |
+| MessageList/2000 time | 68.53 ms | 68.03 ms | ~ (p=0.684) |
+| MessageList/500 B/op, allocs | 2.944 MiB, 18.57k | 2.489 MiB, 15.32k | -15.43%, -17.51% (p=0.000) |
+| MessageList/2000 B/op, allocs | 12.01 MiB, 74.10k | 10.17 MiB, 61.10k | -15.30%, -17.55% (p=0.000) |
+
+- **Verdict**: KEPT (alloc-focused). B/op and allocs drop about 15-17%
+  with p=0.000. Time shows no regression, and the geomean is -8%, though
+  that is not significant because the machine was under heavy load.
