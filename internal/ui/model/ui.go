@@ -273,7 +273,10 @@ type UI struct {
 	// leftSidebar is the cross-workspace session navigator. It is visible
 	// when leftSidebarVisible is true and focused when focus is
 	// uiFocusLeftSidebar.
-	leftSidebar        *SessionsSidebar
+	leftSidebar *SessionsSidebar
+	// bgLoad pages the rest of each workspace's sessions into the left
+	// sidebar after the bounded first overview.
+	bgLoad             backgroundLoader
 	leftSidebarVisible bool
 	// leftSidebarWidth is the navigator's width in columns. Seeded from
 	// config so a resize persists across restarts.

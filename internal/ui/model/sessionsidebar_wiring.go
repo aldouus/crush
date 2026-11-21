@@ -49,14 +49,17 @@ type workspaceOverviewsMsg struct {
 // fetches. The sidebar shows far fewer per workspace (its cap is an even
 // share of the body height); the rest collapse into the "…N more" row,
 // which opens the workspace's full session picker. A text search fetches
-// complete lists.
+// complete lists unless the background loader (sessionsidebar_bgload.go)
+// already paged everything in.
 const overviewSessionLimit = 50
 
 // loadWorkspaceOverviews fetches the cross-workspace session overviews off
 // the Update goroutine. Lists are bounded unless the sidebar is searching.
 func (m *UI) loadWorkspaceOverviews() tea.Cmd {
 	limit := overviewSessionLimit
-	if m.leftSidebar != nil && m.leftSidebar.Searching() {
+	// Searching needs every session; once the background loader has paged
+	// them all in, bounded refreshes are re-merged with them instead.
+	if m.leftSidebar != nil && m.leftSidebar.Searching() && !m.bgLoad.complete() {
 		limit = 0
 	}
 	return func() tea.Msg {

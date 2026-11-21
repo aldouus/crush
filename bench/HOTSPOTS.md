@@ -415,3 +415,12 @@ nested-skill edits). Still open: bounding the backend peek cache.
 5. **Compact/cached registry**: keep the deduped registry in memory, revalidate by file stat; compact on write.
 6. **Replica delta**: use a seq/updated index so the no-op poll is O(changes); stream full sync in pages.
 7. **LRU-size caches**: make the peek cache an LRU bounded by sessions held; switch prompt/gitignore caches to LRU (and size gitignore >= registry count), noting prompt TTL dominates.
+
+Attempt 38: progressive background loading. Ready still uses the bounded
+`limit=50` overview; the TUI then pages the rest via
+`/v1/workspace-overviews?root=&after=&limit=500` (peek-cache backed).
+Time to fully loaded: 10x200 0.56 s, 100x2000 6.3 s, 100x5000 15.4 s,
+300x2000 17.7 s, 300x5000 51 s (~30k sessions/s, one request in flight).
+TUI RSS after full load: 78 / 189 / 332 / 419 / 688 MB. Remaining hot
+spots: full sidebar re-projection (inbox sort over every row) when the
+navigator is visible, and TUI memory per held session at 1M+ sessions.

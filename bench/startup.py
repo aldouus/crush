@@ -192,6 +192,9 @@ class Server:
             self.proc.wait()
 
 
+FULL_LOAD = float(os.environ.get("STARTUP_FULL_LOAD", "0"))
+
+
 def run_once(binary, root, sock, trace, proj, settle=0.4, timeout=30.0):
     env = base_env(root, trace)
     if os.path.exists(trace):
@@ -222,6 +225,21 @@ def run_once(binary, root, sock, trace, proj, settle=0.4, timeout=30.0):
                         result["srv." + phase] = (ns - t0) / 1e6
                 break
         time.sleep(0.002)
+    if result is not None and FULL_LOAD > 0:
+        # Progressive loading: wait for every session to be paged into the
+        # TUI, then sample both processes' RSS.
+        fdeadline = time.time() + FULL_LOAD
+        while time.time() < fdeadline:
+            marks, _, pids = read_trace(trace)
+            fl = marks.get((client, "overviews_fully_loaded"))
+            if fl:
+                result["fully_loaded"] = (fl - t0) / 1e6
+                break
+            time.sleep(0.01)
+        result["cli_rss_mb"] = rss_kb(client) / 1024
+        srv = [p for p in pids if p != client]
+        if srv:
+            result["srv_rss_mb"] = rss_kb(srv[0]) / 1024
     if result is not None:
         # Let async client/server work started by the attach (command
         # loading, MCP init, swarm backfill) finish and record its spans.
@@ -321,7 +339,7 @@ def probe_server(sock, pid, runs=5):
 
 
 def summarize(results, mode):
-    keys = PHASES + ["ready"] + sorted(
+    keys = PHASES + ["ready", "fully_loaded", "cli_rss_mb", "srv_rss_mb"] + sorted(
         {k for r in results for k in r if k.startswith("srv.")})
     summary = {"phases": {}, "spans": {}}
     print(f"{'phase':<22}{'median ms':>12}{'stddev':>10}  (n={len(results)}, {mode})")

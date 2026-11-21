@@ -29,6 +29,7 @@
 | 35 | LRU prompt-input / gitignore caches, caps 256/128 -> 1024 (scale fix 7, partial) | 300-workspace round-robin cycle: ns/op, hit% | prompt 23.5 us, 72.8% hit; ignore 906 us, 248 allocs | prompt 239 ns, 100% hit; ignore 176 us, 71 allocs | -99% / -81% (p=0.000) | KEPT |
 | 36 | Lazy owner lookup in replica delta Serve (scale fix 6, partial) | ServeDelta no-change poll (200 / 2000 / 5000 sessions) | 483 us / 2.92 ms / 6.87 ms | 175 us / 179 us / 178 us | -64% / -94% / -97% (p=0.000) | KEPT |
 | 37 | Active/busy session always in bounded overview, WAL-safe peek stamp, LRU-bounded peek cache | correctness (sidebar), 300x5000 ready ms | 1530 +-262 | 631 +-33 (not attributed) | correctness fix | KEPT (correctness) |
+| 38 | Progressive background loading of workspace sessions (paged per-workspace overview + TUI loader) | TUI ready ms (reuse, 10x200 / 100x2000 / 100x5000 / 300x2000 / 300x5000) | 206 / 287 / 381 / 434 / 2014 | 189 / 292 / 393 / 408 / 1728 | no regression (all p>0.05 except 10x200 -7.8% p=0.04, 300x5000 -14% p=0.01, not claimed); full load 0.56 / 6.3 / 15.4 / 17.7 / 51.2 s | KEPT (feature) |
 
 ## Attempt 01: Lazy gh/gh-stack probes
 
@@ -1265,3 +1266,70 @@ workspaces (-96..-99.8%, p=0.000); allocs 108..15026 -> 3.
   ui/model), go vet, golangci-lint clean.
 
 - CI fix (not an attempt): TestIgnoreCacheLRU now builds Load keys with filepath.Join so it passes on Windows; prompt TestInputCacheLRU and other attempt 32-37 tests checked, no path-separator issues found.
+
+## Attempt 38: progressive background loading of workspace sessions
+
+- **Goal (Tai)**: "Ideally we get a quick startup and then continue loading
+  more in the background", with full-text search still working.
+- **Server** (`internal/backend/overview_page.go`, `internal/server/proto.go`,
+  `internal/client/proto.go`, swagger regenerated):
+  `GET /v1/workspace-overviews?root=R[&after=C][&limit=N]` returns a
+  one-element array: workspace R's sessions after cursor C in overview
+  display order, `session_count` = total, `next_cursor` while more follow.
+  The cursor is the last row's ordering key (busy, unread, updated_at, id);
+  `sortSessionOverviews` now breaks ties by ID so the order is total.
+  Detached workspaces page straight out of the attempt-34 peek cache (sorted
+  once per DB stamp), so a page is a stat + slice, no DB read. Absent `root`
+  = legacy behaviour (tested); old servers ignore `root` and return full
+  lists, which the client accepts as a complete page.
+- **TUI** (`sessionsidebar_bgload.go`, `sessionsidebar_bg.go`): first frame
+  and ready still use `limit=50`. 250 ms after the first overview a loader
+  pages remaining sessions (current workspace first, then display order;
+  local-node workspaces only), 1 request in flight, 500 per page, 10 ms
+  between pages. Pages go into a per-root store (deduped by ID) that is
+  re-merged into every bounded overview refresh: fresh rows win, the tail
+  fills up to `session_count`, a complete listing supersedes the store,
+  `EditSessions` (archive/delete/local edits) is applied to the store too,
+  and session `DeletedEvent`s remove the row. Rows are re-projected only
+  while the navigator is visible, at most every max(300 ms, 10x last apply
+  cost); a hidden navigator merges everything on open (it always refreshes).
+  Cancelled by generation + context on workspace switch and on a failed
+  page while disconnected (restarts on the next overview). Once complete,
+  "/" search uses the bounded refresh + store instead of an unbounded fetch;
+  before completion the existing full-fetch fallback stays. The overflow
+  picker (session dialog) and history/full-text search are untouched
+  (`go test ./internal/historysearch` passes; it searches the DBs, not the
+  sidebar list, so it still covers every session).
+- **Tests**: backend paging = full list order, concurrent inserts (no dup /
+  drop of pre-existing rows), bad root/cursor, legacy listing unchanged;
+  TUI merge/dedupe/order stability, live update wins, delete during load,
+  hidden-sidebar deferral, current-first order + error skip + remote skip,
+  cancellation by reset, reset on disconnect. go vet, golangci-lint (0
+  issues), go test -race on backend, ui/model, client, server, workspace,
+  proto, historysearch.
+- **Bench** (bench/out/attempt38, reuse mode, 10 runs, HEAD 841f381e
+  `old` vs `new` back to back per point; full-load 3 runs with
+  `STARTUP_FULL_LOAD=300`; load avg 1.8-3.2):
+
+| WS x sess | ready old (ms) | ready new (ms) | delta | p (MWU) | fully loaded (s) | TUI RSS (MB) | server RSS (MB) |
+|---|---|---|---|---|---|---|---|
+| 10x200 | 206 +-20 | 189 +-18 | -7.8% | 0.041 | 0.56 | 78 | 110 |
+| 100x2000 | 287 | 292 +-21 | +1.7% | 0.65 | 6.3 | 189 | 380 |
+| 100x5000 | 381 | 393 +-43 | +3.1% | 0.50 | 15.4 | 332 | 730 |
+| 300x2000 | 434 | 408 +-36 | -5.9% | 0.11 | 17.7 | 419 | 767 |
+| 300x5000 | 2014 | 1728 +-158 | -14.2% | 0.010 | 51.2 | 688 | 265 |
+
+  (old stddevs at the larger points are dominated by the first run's cold
+  peek; ready gains are not claimed, nothing on the ready path changed
+  beyond the sort tiebreak.)
+- **Jank**: per page the Update loop only does map inserts for 500 rows.
+  Re-projection was measured at up to 84 ms per apply with 200k sessions
+  and the navigator visible (inbox view sorts every row) before adding the
+  hidden-skip and adaptive spacing; in the harness (navigator hidden)
+  `ui.bg_max_apply_us` = 0. With the navigator open at 1M+ sessions an
+  apply can still take ~0.1-0.4 s once per few seconds: left as follow-up
+  (incremental inbox projection).
+- **Left**: visible-navigator frame-gap probe; TUI RSS at 300x5000 (688 MB)
+  suggests capping background loading or a lighter row type for tails.
+- **Verdict**: KEPT as feature (no ready regression >3% with p<0.05).
+

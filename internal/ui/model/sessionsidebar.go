@@ -153,6 +153,10 @@ type SessionsSidebar struct {
 	// red "prompt-pending" indicator so a background session blocked on
 	// a prompt is visible in the list before the user switches to it.
 	pendingSessions map[string]bool
+
+	// bg holds sessions paged in by the background loader beyond the
+	// bounded overview, merged into every overview refresh.
+	bg backgroundSessions
 }
 
 // SetPendingSessions replaces the set of session IDs that have an
@@ -399,6 +403,7 @@ func (s *SessionsSidebar) SessionCounts() SessionCounts {
 func (s *SessionsSidebar) SetOverviews(overviews []proto.WorkspaceOverview) {
 	prevID := s.selectedSessionID()
 	s.overviews = overviews
+	s.bg.mergeInto(s.overviews)
 	s.sortSessions()
 	s.rebuildRows()
 	s.restoreCursor(prevID)
@@ -430,6 +435,13 @@ func (s *SessionsSidebar) SetActiveSession(id string) {
 // Sort key: active first, then busy, then unread, then UpdatedAt desc.
 func (s *SessionsSidebar) sortSessions() {
 	for wi := range s.overviews {
+		s.sortWorkspaceSessions(wi)
+	}
+}
+
+// sortWorkspaceSessions sorts workspace wi's sessions for display.
+func (s *SessionsSidebar) sortWorkspaceSessions(wi int) {
+	{
 		sess := s.overviews[wi].Sessions
 		sort.SliceStable(sess, func(i, j int) bool {
 			a, b := sess[i], sess[j]
