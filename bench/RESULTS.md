@@ -5,6 +5,7 @@
 | 01 | Lazy gh/gh-stack probes | CLI cold start (`--version`) | 204.9 ms | 112.3 ms | -45% | KEPT |
 | 02 | Lazy chroma lexer registry (investigation) | CLI cold start (`--version`) | 111.1 ms | n/a | n/a | REVERTED |
 | 03 | Reuse TUI frame canvas | `BenchmarkUIView` msgs=500 | 4.061 ms, 1686 KiB | 3.527 ms, 232 KiB | -13.2% time, -86% B/op | KEPT |
+| 04 | Single-pass TUI frame flatten | `BenchmarkUIView` msgs=500 | 3.539 ms, 231.4 KiB | 3.451 ms, 236.6 KiB | ~ (p=0.48), +2.3% B/op | REVERTED |
 
 ## Attempt 01: Lazy gh/gh-stack probes
 
@@ -100,3 +101,25 @@
 - **Tests**: `go test ./internal/ui/model/`, `go vet`, golangci-lint: pass,
   0 issues.
 - **Verdict**: KEPT.
+
+## Attempt 04: Single-pass TUI frame flatten
+
+- **Hypothesis** (HOTSPOTS #2): `UI.View` post-processes `canvas.Render()`
+  with `ReplaceAll` + `Split` + per-line `TrimRight` + `Join`, copying the
+  frame several times; a single pass into a `strings.Builder` (returning the
+  input unchanged when nothing needs trimming) should cut time and bytes.
+- **Change**: `internal/ui/model/draw.go` (`flattenFrame` helper) plus a
+  table test against the old pipeline (CRLF, lone CR, ANSI, wide chars, tabs,
+  empty lines); byte-identical output verified.
+- **Load avg**: 2.97 before, 2.64 after (1-min).
+- **Results** (GOMAXPROCS=4, count=10):
+
+| Benchmark | Before | After | Delta |
+|-----------|--------|-------|-------|
+| UIView/msgs=500 | 3.539 ms, 231.4 KiB, 2450 allocs | 3.451 ms, 236.6 KiB, 2449 allocs | ~ (p=0.481), +2.26% B/op |
+| UIView/msgs=2000 | 3.513 ms, 230.9 KiB | 3.471 ms, 236.0 KiB | ~ (p=0.971), +2.17% B/op |
+| UIScrollFrame | 6.473 ms, 1.173 MiB | 6.537 ms, 1.177 MiB | ~ (p=0.739), +0.29% B/op |
+
+- **Verdict**: REVERTED. The flatten step is not a measurable share of frame
+  time (draw/render dominates); the old `Split`/`Join` output is tighter than
+  a `Grow(len(s))` builder, so B/op got slightly worse.
