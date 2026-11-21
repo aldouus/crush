@@ -646,3 +646,25 @@
 - **Tests**: `go test -race ./internal/replica ./internal/cluster`, vet,
   lint clean.
 - **Verdict**: KEPT.
+
+## Attempt 23: cluster cold join pairing (fsync overlap / no-op saves)
+
+- **Profile**: wall-time probe of `pairedTrio`: 3x `NewNode` ~32 ms
+  (identity create: ed25519 keygen + two `writeFileAtomic`, each
+  F_FULLFSYNC on darwin), each Join ~24-29 ms (pending ~10-15 ms,
+  approve->joined ~14 ms), mesh ~13 ms. CPU profile dominated by TLS
+  handshakes (NATS routes) and `writeFileAtomic` syscalls.
+- **Hypothesis A**: `Store.Update` rewrites cluster.json on no-op
+  updates; skipping byte-identical rewrites saves fsyncs.
+  Result: 90.21 ms -> 89.79 ms, ~ (p=0.481). No redundant saves on the
+  join path.
+- **Hypothesis B**: overlapping the two identity-file fsyncs in
+  `createIdentity` (stage both concurrently, rename key before
+  node.json) halves identity-create latency.
+  Result: 90.21 ms -> 89.82 ms, ~ (p=0.315). APFS appears to serialize
+  F_FULLFSYNC per volume, so concurrent syncs do not overlap.
+- **Bench**: `BenchmarkClusterColdJoin`, GOMAXPROCS=4, count=10, load
+  2.05-2.68. B/op, allocs unchanged.
+- **Verdict**: REVERTED (both, no significant change). Remaining costs
+  are durable fsyncs (keeping them preserves crash safety) and NATS
+  route TLS handshakes in third-party code.
