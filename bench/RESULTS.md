@@ -6,6 +6,7 @@
 | 02 | Lazy chroma lexer registry (investigation) | CLI cold start (`--version`) | 111.1 ms | n/a | n/a | REVERTED |
 | 03 | Reuse TUI frame canvas | `BenchmarkUIView` msgs=500 | 4.061 ms, 1686 KiB | 3.527 ms, 232 KiB | -13.2% time, -86% B/op | KEPT |
 | 04 | Single-pass TUI frame flatten | `BenchmarkUIView` msgs=500 | 3.539 ms, 231.4 KiB | 3.451 ms, 236.6 KiB | ~ (p=0.48), +2.3% B/op | REVERTED |
+| 10 | Markdown renderer / xchroma style memo | `BenchmarkMarkdownRender` | 39.82 ms | 38.55 ms | ~ (p=0.39) | REVERTED |
 
 ## Attempt 01: Lazy gh/gh-stack probes
 
@@ -219,3 +220,27 @@
 - **Verdict**: KEPT (alloc-focused). B/op and allocs drop about 15-17%
   with p=0.000. Time shows no regression, and the geomean is -8%, though
   that is not significant because the machine was under heavy load.
+
+## Attempt 10: markdown renderer / xchroma formatter style memo
+
+- **Hypothesis**: (HOTSPOTS #6) a glamour TermRenderer is built per render
+  and finished items re-render markdown on relayout. Investigation showed
+  both are already done on HEAD: `common.MarkdownRenderer` memoizes per
+  width, and assistant/user items cache rendered sections per
+  (width, content hash). Profile of `BenchmarkMarkdownRender`: ~78% inside
+  glamour/goldmark/lipgloss writers (third-party), ~20% in crush's
+  `xchroma.Formatter`. Tested fallback: memoize the lipgloss style per
+  token type within a Format call and use `io.WriteString` over `fmt.Fprint`.
+- **Change (reverted)**: `internal/ui/xchroma/chroma.go`.
+- **Load avg**: 4.03 (before) / 5.59 (after).
+
+| Benchmark | Before | After | Delta |
+|---|---|---|---|
+| MarkdownRender time | 39.82 ms | 38.55 ms | ~ (p=0.393) |
+| MarkdownRender B/op | 3.984 MiB | 4.014 MiB | +0.75% (p=0.011) |
+| MarkdownRender allocs | 358.6k | 357.4k | -0.33% (p=0.000) |
+| DiffRender unified/split time | 80.35 / 117.0 ms | 80.13 / 118.8 ms | ~ |
+
+- **Verdict**: REVERTED. The hypothesis was already in place on HEAD, and
+  the formatter tweak changed nothing measurable. Whatever cost is left
+  sits in third-party glamour writer chains (WrapWriter/IndentWriter/MarginWriter).
