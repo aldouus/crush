@@ -623,3 +623,26 @@
   unreproduced failure, then 13 passes incl. -count=8), new
   `TestClusterJoinDenyWakesLongPoll`, vet, lint clean.
 - **Verdict**: KEPT.
+
+## Attempt 22: replica sync owner lookups cached per batch
+
+- **Hypothesis**: `Apply` runs one `SELECT owner_node ... FROM sessions`
+  per child row even after attempt 13's statement cache; caching the
+  result per session within one batch removes most of those queries.
+- **Change**: `internal/replica/replica.go`. `owner()` memoizes
+  (owner, exists) per session ID for the batch; the entry is dropped
+  after any sessions upsert or delete in the batch so later lookups see
+  the batch's own ownership changes. Results identical (same
+  "" = owned here, missing = not exists semantics).
+- **Bench**: GOMAXPROCS=4, count=10, load 1.69 (start) / 2.10 (end).
+
+| Metric | Before | After | Delta |
+|---|---|---|---|
+| ReplicaFullSync time | 456.7 ms +-6% | 431.2 ms +-5% | -5.58% (p=0.011) |
+| ReplicaFullSync B/op | 31.78 MiB | 29.78 MiB | -6.29% (p=0.000) |
+| ReplicaFullSync allocs | 395.6k | 339.8k | -14.11% (p=0.000) |
+| ReplicaServeDelta time | 474.1 us | 467.8 us | ~ (p=0.579) |
+
+- **Tests**: `go test -race ./internal/replica ./internal/cluster`, vet,
+  lint clean.
+- **Verdict**: KEPT.

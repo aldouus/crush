@@ -237,16 +237,27 @@ func Apply(ctx context.Context, db *sql.DB, peer string, batch Batch) (Stats, er
 	stmts := &stmtCache{tx: tx, m: map[string]*sql.Stmt{}}
 	defer stmts.close()
 
+	type ownerEntry struct {
+		owner  string
+		exists bool
+	}
+	// Owner lookups are cached for the batch; any write to a sessions row
+	// drops its entry so later lookups see the batch's own changes.
+	ownerCache := map[string]ownerEntry{}
 	owner := func(sessionID string) (string, bool) {
+		if e, ok := ownerCache[sessionID]; ok {
+			return e.owner, e.exists
+		}
+		var e ownerEntry
 		var o, moved sql.NullString
-		err := stmts.queryRow(ctx, `SELECT owner_node, moved_to_node FROM sessions WHERE id = ?`, sessionID).Scan(&o, &moved)
-		if err != nil {
-			return "", false
+		if err := stmts.queryRow(ctx, `SELECT owner_node, moved_to_node FROM sessions WHERE id = ?`, sessionID).Scan(&o, &moved); err == nil {
+			e.exists = true
+			if o.Valid {
+				e.owner = o.String
+			}
 		}
-		if !o.Valid || o.String == "" {
-			return "", true // owned by this node
-		}
-		return o.String, true
+		ownerCache[sessionID] = e
+		return e.owner, e.exists
 	}
 
 	byTable := map[string][]Change{}
@@ -259,6 +270,9 @@ func Apply(ctx context.Context, db *sql.DB, peer string, batch Batch) (Stats, er
 			switch c.Op {
 			case "D":
 				ok, err := deleteIfPeerOwned(ctx, tx, c, peer, owner)
+				if table == "sessions" {
+					delete(ownerCache, c.PK)
+				}
 				if err != nil {
 					return st, err
 				}
@@ -292,6 +306,9 @@ func Apply(ctx context.Context, db *sql.DB, peer string, batch Batch) (Stats, er
 						st.Skipped++
 						continue
 					}
+				}
+				if table == "sessions" {
+					delete(ownerCache, valueString(c.Row["id"]))
 				}
 				changed, err := upsert(ctx, stmts, table, c.Row, table == "sessions")
 				if err != nil {
