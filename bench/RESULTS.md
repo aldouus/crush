@@ -4,6 +4,7 @@
 |---|-------|--------|--------|-------|-------|---------|
 | 01 | Lazy gh/gh-stack probes | CLI cold start (`--version`) | 204.9 ms | 112.3 ms | -45% | KEPT |
 | 02 | Lazy chroma lexer registry (investigation) | CLI cold start (`--version`) | 111.1 ms | n/a | n/a | REVERTED |
+| 03 | Reuse TUI frame canvas | `BenchmarkUIView` msgs=500 | 4.061 ms, 1686 KiB | 3.527 ms, 232 KiB | -13.2% time, -86% B/op | KEPT |
 
 ## Attempt 01: Lazy gh/gh-stack probes
 
@@ -70,3 +71,32 @@
   completely.
 - **Verdict**: REVERTED (no change kept). If chroma ever gets made lazy,
   it should be done upstream in chroma.
+
+## Attempt 03: Reuse TUI frame canvas
+
+- **Hypothesis**: `UI.View` allocates a fresh 200x60 `uv.ScreenBuffer` per
+  frame (~85% of bytes/frame, HOTSPOTS #2). Reusing it and clearing to
+  `EmptyCell` (same state as a new buffer) cuts allocation and GC work.
+- **Change**: `internal/ui/model/draw.go` (`frameCanvas`: reuse, clear via
+  `Buffer.Clear`, reallocate only on size change), `internal/ui/model/ui.go`
+  (`canvas` field), new `internal/ui/model/canvas_reuse_test.go` asserting
+  byte-identical View output vs a fresh canvas across scrolls and resizes.
+  The canvas never escapes View (output is flattened to a string).
+- **Method**: `go test -bench -benchmem -count=10`, `GOMAXPROCS=4`, HEAD in a
+  temp worktree then change, back to back. Load avg 2.03 start, 2.77 end.
+- **Results** (median, benchstat):
+
+  | Benchmark | Before | After | Delta | p |
+  |-----------|--------|-------|-------|---|
+  | UIView/msgs=500 time | 4.061 ms | 3.527 ms | -13.16% | 0.000 |
+  | UIView/msgs=2000 time | 4.012 ms | 3.435 ms | -14.39% | 0.000 |
+  | UIScrollFrame time | 7.223 ms | 6.528 ms | -9.61% | 0.000 |
+  | UIDraw time | 1.874 ms | 1.842 ms | ~ | 0.529 |
+  | UIView/msgs=500 B/op | 1686.3 KiB | 231.8 KiB | -86.25% | 0.000 |
+  | UIScrollFrame B/op | 2.594 MiB | 1.172 MiB | -54.81% | 0.000 |
+  | UIView allocs/op | 2577 | 2450 | -4.93% | 0.000 |
+
+  UIDraw unchanged as expected (it already reuses a buffer).
+- **Tests**: `go test ./internal/ui/model/`, `go vet`, golangci-lint: pass,
+  0 issues.
+- **Verdict**: KEPT.

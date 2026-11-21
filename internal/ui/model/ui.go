@@ -347,6 +347,9 @@ type UI struct {
 	frameSkipPut     bool
 	frameGCArmed     bool
 
+	// canvas is the screen buffer reused by View across frames.
+	canvas uv.ScreenBuffer
+
 	// Wheel coalescing (see scroll.go). pendingScroll accumulates wheel
 	// deltas while scrollFlushPending marks an open coalesce window.
 	pendingScroll      int
