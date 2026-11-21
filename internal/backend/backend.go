@@ -1336,6 +1336,9 @@ func stringSlicesEqual(a, b []string) bool {
 // getGitBranch returns the current git branch for the given directory.
 // Returns empty string if not in a git repo or on error.
 func getGitBranch(dir string) string {
+	if branch, ok := readGitBranch(dir); ok {
+		return branch
+	}
 	cmd := exec.CommandContext(context.Background(), "git", "branch", "--show-current")
 	cmd.Dir = dir
 	out, err := cmd.Output()

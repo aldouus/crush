@@ -17,6 +17,7 @@
 | 18 | Startup LSP/MCP init off critical path (investigation) | cold TUI first frame / ready | 387.6 / 469.0 ms (no MCP) | 390.1 / 472.3 ms (slow MCP) | ~ (+0.7%, within 1 sd) | REVERTED (already async) |
 | 19 | Fork `git branch` once per workspace open | warm TUI first frame / ready | 235.4 / 318.8 ms | 215.2 / 297.6 ms | -8.6% / -6.6% (p<1e-11) | KEPT |
 | 21 | Long-poll join approval | `BenchmarkClusterJoinApprovalLatency` / `ColdJoin` | 1706 ms / 122.96 ms | 9.2 ms / 88.81 ms | -99.5% / -27.8% (p=0.000) | KEPT |
+| 24 | Read git HEAD instead of forking `git branch` on workspace open | warm workspace_created / first_frame / ready | 202.5 / 217.3 / 295.9 ms | 176.6 / 191.3 / 273.3 ms | -12.8% / -12.0% / -7.6% (p<1e-8) | KEPT |
 
 ## Attempt 01: Lazy gh/gh-stack probes
 
@@ -668,3 +669,36 @@
 - **Verdict**: REVERTED (both, no significant change). Remaining costs
   are durable fsyncs (keeping them preserves crash safety) and NATS
   route TLS handshakes in third-party code.
+
+## Attempt 24: warm workspace open round 2 (git HEAD read, no fork)
+
+- **Profile**: CPU profile of a fresh `db.Connect` (all 20 migrations,
+  ~35 ms): dominated by SQLite full schema reparses triggered by each
+  `ALTER TABLE ADD COLUMN` plus WAL commit pwrites; not reducible without
+  rewriting migrations or relaxing durability. The remaining avoidable
+  cost was the one `git branch --show-current` fork per workspace open
+  (~25 ms, paid even for non-repos).
+- **Hypothesis**: resolving the branch by reading `.git`/`HEAD` directly
+  removes the subprocess from CreateWorkspace.
+- **Change**: `internal/backend/gitbranch*.go` (`readGitBranch`), used by
+  `getGitBranch` in `internal/backend/backend.go`. Handles plain repos,
+  subdirs, `.git` gitdir files (worktrees/submodules), detached HEAD, and
+  no repo. Falls back to git for anything else: GIT_* env overrides, bare
+  repo / inside `.git`, foreign ownership (safe.directory), unusual HEAD
+  (symlink, reftable `.invalid`, non-heads refs), and always on Windows.
+  Test compares against the git CLI.
+- **Method**: `bench/startup.py <bin> 20 --warm`, old/new/old/new (n=40
+  each), HEAD binary from a temp worktree. Load 8.12 (start, decaying) /
+  5.56 (end).
+
+| Metric (warm, n=40) | Before | After | Delta |
+|---|---|---|---|
+| workspace open (created - server_ready) | 81.8 +-7.6 | 55.8 +-5.7 | -31.8% (MW p=2e-13) |
+| workspace_created | 202.5 +-15.3 | 176.6 +-13.1 | -12.8% (p=1e-9) |
+| first_frame | 217.3 +-16.4 | 191.3 +-14.6 | -12.0% (p=2e-9) |
+| ready | 295.9 +-19.5 | 273.3 +-19.4 | -7.6% (p=8e-9) |
+
+- **Tests**: `go test ./internal/backend`, vet (darwin + GOOS=windows),
+  lint clean.
+- **Verdict**: KEPT. Next biggest: fresh-DB migrations (~35 ms, first
+  open of a project only).
