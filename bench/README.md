@@ -75,3 +75,18 @@ go tool pprof -top -cum bench/out/baseline/diff.cpu.pprof | head -25
 ```
 
 See `HOTSPOTS.md` for the ranked optimization candidates.
+
+## Interactive startup / attach
+
+```sh
+go build -o /tmp/crush-trace .
+bench/startup.py /tmp/crush-trace 10 --mode reuse --fixture large \
+  --json out.json --raw raw.json
+```
+
+Modes: `cold` (fresh server + project per run), `warm-new` (old
+`--warm`: shared server, new non-git project per run, i.e. workspace
+creation), `reuse` (same server + same project, workspace still loaded),
+`reuse-teardown` (same server + project, workspace torn down between
+launches). The summary lists startup phases plus every
+`startuptrace.Span`/`Count` per role (`cli`/`srv`) with calls per run.

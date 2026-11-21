@@ -275,9 +275,11 @@ func setupClientServerWorkspace(cmd *cobra.Command) (workspace.Workspace, func()
 	clientWs := workspace.NewClientWorkspace(c, *protoWs)
 
 	if protoWs.Config.IsConfigured() {
+		endInit := startuptrace.Span("cli.init_agent_rpc")
 		if err := clientWs.InitCoderAgent(cmd.Context()); err != nil {
 			slog.Error("Failed to initialize coder agent", "error", err)
 		}
+		endInit()
 	}
 
 	startuptrace.Mark("agent_init")
@@ -287,7 +289,9 @@ func setupClientServerWorkspace(cmd *cobra.Command) (workspace.Workspace, func()
 // connectToServer ensures the server is running, creates a client and
 // workspace, and returns a cleanup function that deletes the workspace.
 func connectToServer(cmd *cobra.Command, opts ...func(*proto.Workspace)) (*client.Client, *proto.Workspace, func(), error) {
+	endCwd := startuptrace.Span("cli.resolve_cwd")
 	cwd, err := ResolveCwd(cmd)
+	endCwd()
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -302,7 +306,10 @@ func connectToServerAt(cmd *cobra.Command, cwd string, opts ...func(*proto.Works
 		return nil, nil, nil, fmt.Errorf("invalid host URL: %v", err)
 	}
 
-	if err := ensureServer(cmd, hostURL); err != nil {
+	endEnsure := startuptrace.Span("cli.ensure_server")
+	err = ensureServer(cmd, hostURL)
+	endEnsure()
+	if err != nil {
 		return nil, nil, nil, err
 	}
 	startuptrace.Mark("server_ready")
@@ -330,7 +337,9 @@ func connectToServerAt(cmd *cobra.Command, cwd string, opts ...func(*proto.Works
 	}
 
 	stopNotice := noticeWhileWaiting(ctx, "the crush server to open the workspace at "+cwd)
+	endCreate := startuptrace.Span("cli.create_workspace_rpc")
 	ws, err := c.CreateWorkspace(ctx, wsReq)
+	endCreate()
 	stopNotice()
 	startuptrace.Mark("workspace_created")
 	if err != nil {

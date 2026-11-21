@@ -400,8 +400,11 @@ func (b *Backend) CreateWorkspace(args proto.Workspace) (*Workspace, proto.Works
 	if err != nil {
 		return nil, proto.Workspace{}, err
 	}
+	defer startuptrace.Span("srv.create_workspace")()
 
+	endKey := startuptrace.Span("srv.resolve_workspace_key")
 	key, err := resolveWorkspaceKey(args.Path)
+	endKey()
 	if err != nil {
 		return nil, proto.Workspace{}, fmt.Errorf("failed to resolve workspace path: %w", err)
 	}
@@ -431,7 +434,9 @@ func (b *Backend) CreateWorkspace(args proto.Workspace) (*Workspace, proto.Works
 	}
 	b.mu.Unlock()
 
+	endBuild := startuptrace.Span("srv.build_workspace")
 	ws, err := b.buildWorkspace(args, key, effectiveCwd)
+	endBuild()
 	if err != nil {
 		return nil, proto.Workspace{}, err
 	}
@@ -466,9 +471,11 @@ func (b *Backend) CreateWorkspace(args proto.Workspace) (*Workspace, proto.Works
 	// otherwise — can see the swarm tool without depending on a
 	// follow-up InitAgent call. Best-effort: swarm is non-critical, so
 	// a wiring failure must not fail workspace creation.
+	endSwarm := startuptrace.Span("srv.wire_swarm")
 	if err := b.wireSwarmBackend(b.ctx, ws); err != nil {
 		slog.Warn("Failed to wire swarm backend into workspace", "root", key, "error", err)
 	}
+	endSwarm()
 
 	// Record this workspace in the global registry so a future Crush
 	// instance (or the server on startup) can enumerate and jump to it
@@ -476,6 +483,7 @@ func (b *Backend) CreateWorkspace(args proto.Workspace) (*Workspace, proto.Works
 	// must not fail workspace creation.
 	skipTemp := b.hideTempWorkspaces() && isTempWorkspace(key, cfg.Config().Options.DataDirectory)
 	if !args.Isolated && b.registry != nil && !skipTemp {
+		defer startuptrace.Span("srv.registry_add")()
 		if err := b.registry.Add(registry.Entry{
 			Root:     key,
 			DataDir:  cfg.Config().Options.DataDirectory,
@@ -515,7 +523,9 @@ func (b *Backend) CreateWorkspace(args proto.Workspace) (*Workspace, proto.Works
 // where the user actually is even inside a linked worktree.
 func (b *Backend) buildWorkspace(args proto.Workspace, key, effectiveCwd string) (*Workspace, error) {
 	startuptrace.Mark("ws_build")
+	endCfg := startuptrace.Span("srv.config_init")
 	cfg, err := config.Init(key, args.DataDir, args.Debug)
+	endCfg()
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize config: %w", err)
 	}
@@ -534,11 +544,15 @@ func (b *Backend) buildWorkspace(args proto.Workspace, key, effectiveCwd string)
 	cfg.Overrides().SkipPermissionRequests = skipPerms
 	startuptrace.Mark("ws_config")
 
+	endDot := startuptrace.Span("srv.dotcrush_dir")
 	if err := createDotCrushDir(cfg.Config().Options.DataDirectory); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
 	}
+	endDot()
 
+	endDB := startuptrace.Span("srv.db_connect")
 	conn, err := db.Connect(b.ctx, cfg.Config().Options.DataDirectory, db.WithDataDirLock(true))
+	endDB()
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
@@ -548,6 +562,7 @@ func (b *Backend) buildWorkspace(args proto.Workspace, key, effectiveCwd string)
 	// constructed WITHOUT WithGlobalMirror to prevent last-writer-wins
 	// cross-talk between workspaces.
 	startuptrace.Mark("ws_db")
+	endSkills := startuptrace.Span("srv.skills_discover")
 	discoveryCfg := skillsDiscoveryConfig(cfg)
 	allSkills, activeSkills, skillStates := skills.DiscoverFromConfig(discoveryCfg)
 	skillsMgr := skills.NewManager(
@@ -555,9 +570,13 @@ func (b *Backend) buildWorkspace(args proto.Workspace, key, effectiveCwd string)
 		skills.WithResolvedPaths(discoveryCfg.ResolvePaths()),
 		skills.WithWorkingDir(discoveryCfg.WorkingDir),
 	)
+	endSkills()
+	startuptrace.Count("srv.skills_discovered", len(allSkills))
 
 	startuptrace.Mark("ws_skills")
+	endApp := startuptrace.Span("srv.app_new")
 	appWorkspace, err := app.New(b.ctx, conn, cfg, skillsMgr, effectiveCwd)
+	endApp()
 	startuptrace.Mark("ws_app")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create app workspace: %w", err)
@@ -595,6 +614,7 @@ func (b *Backend) buildWorkspace(args proto.Workspace, key, effectiveCwd string)
 // actually missing, so a plain already-wired switch/reconnect is a
 // no-op.
 func (b *Backend) adoptExistingWorkspace(existing, loser *Workspace, clientID string, args proto.Workspace, effectiveCwd, key string) (*Workspace, proto.Workspace, error) {
+	defer startuptrace.Span("srv.adopt_existing")()
 	logFirstWinsMismatch(existing, args)
 	b.registerClient(existing, clientID, args.Env, args.Path)
 	b.mu.Unlock()
@@ -602,9 +622,11 @@ func (b *Backend) adoptExistingWorkspace(existing, loser *Workspace, clientID st
 		loser.invokeShutdown()
 	}
 	b.reloadWorkspaceConfig(existing)
+	endSwarm := startuptrace.Span("srv.wire_swarm_if_missing")
 	if err := b.wireSwarmBackendIfMissing(b.ctx, existing); err != nil {
 		slog.Warn("Failed to wire swarm backend into reused workspace", "root", key, "error", err)
 	}
+	endSwarm()
 	return existing, workspaceToProtoForClient(existing, effectiveCwd), nil
 }
 

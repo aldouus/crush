@@ -736,3 +736,47 @@
   ./internal/server`, vet, lint clean. Residual tail (~0.8 s p99) comes
   from iterations where the 1 s re-solicit cooldown or a duplicate-route
   race defers to the stock redial.
+
+## Attempt 26: repeated TUI attach, FS + DB discovery (investigation, baseline only)
+
+- **Goal**: find which filesystem walks / discoveries / DB work run on
+  every TUI launch against an already-running server and the same
+  workspace path. No optimization in this attempt.
+- **Caveat on earlier "warm" numbers**: `startup.py --warm` reused the
+  server but created a new, non-git temp project per run. Those runs
+  measured new-workspace creation (DB create + migrate) and skipped all
+  git-dependent work; they were not repeat-attach numbers. The mode is
+  now called `warm-new` (`--warm` still maps to it).
+- **Harness**: `bench/startup.py` gains `--mode
+  cold|warm-new|reuse|reuse-teardown`, `--fixture small|large`, `--raw`
+  per-run JSON, an explicitly started `--persistent` private-socket
+  server with device listeners disabled, a fake offline provider, and a
+  per-role span/count summary. `startuptrace` gains `Span`/`Count`
+  (every occurrence; static labels only) and an env-gated
+  `CRUSH_STARTUP_TRACE_RECONNECT_GRACE` knob for forcing teardown.
+  Spans added in client connect, CreateWorkspace/buildWorkspace,
+  config.Load, db.Connect, skills walk, app.New, checkpoint ignore read,
+  prompt.Build, overviews, and every HTTP route (`srv.http_us:<pattern>`).
+- **Baseline** (10 runs, medians, ready ms; load avg 2.4):
+
+| fixture | cold | warm-new | reuse | reuse-teardown |
+|---|---|---|---|---|
+| large (9.1k files, 8 extra DBs) | 503 | 257 | 308 | 728 |
+| small (empty git repo) | 479 | 246 | 240 | 365 |
+
+- **Findings** (details in `HOTSPOTS.md`, "Repeated TUI attach"):
+  - Every connect, even to a loaded workspace, rebuilds the coordinator
+    twice (`agent/init`, `agent/update`), which launches 7 async
+    `prompt.Build` calls, each running 3 `git` execs (254 ms each on the
+    large repo, 1.78 s total) and a skills fastwalk (147 entries each).
+  - Every workspace rebuild (after the TUI quits and the workspace tears
+    down) pays `checkpoint.InitRepoAt` -> `gitignore.ReadPatterns`, a
+    full work-tree walk: 273 ms on the critical path (large), plus 12
+    `prompt.Build` calls (5.3 s CPU).
+  - Config discovery (<1 ms), existing-DB open (4 ms), registry list
+    (0.4 ms) and cross-project DB peeks (3 ms for 8 DBs) are not hot.
+- **Recommended first target**: cache / deduplicate `prompt.Build`
+  (git status + skills discovery) per coordinator generation and drop
+  the redundant coordinator rebuilds on attach; second, cache the
+  checkpoint gitignore matcher per project root across teardown.
+- **Verdict**: BASELINE (instrumentation only).

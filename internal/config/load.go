@@ -28,6 +28,7 @@ import (
 	"github.com/taigrr/crush/internal/filepathext"
 	"github.com/taigrr/crush/internal/fsext"
 	"github.com/taigrr/crush/internal/home"
+	"github.com/taigrr/crush/internal/startuptrace"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -42,9 +43,14 @@ func Load(workingDir, dataDir string, debug bool) (*ConfigStore, error) {
 	// validate fork-specific fields without hitting a stale upstream URL.
 	go writeGlobalSchema()
 
+	endLookup := startuptrace.Span("srv.cfg.lookup_configs")
 	configPaths := lookupConfigs(workingDir)
+	endLookup()
+	startuptrace.Count("srv.cfg.config_candidates", len(configPaths))
 
+	endLoad := startuptrace.Span("srv.cfg.load_paths")
 	cfg, loadedPaths, err := loadFromConfigPaths(configPaths)
+	endLoad()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load config from paths %v: %w", configPaths, err)
 	}
@@ -111,7 +117,9 @@ func Load(workingDir, dataDir string, debug bool) (*ConfigStore, error) {
 	}
 
 	// Load known providers, this loads the config from catwalk
+	endProviders := startuptrace.Span("srv.cfg.providers")
 	providers, err := Providers(cfg)
+	endProviders()
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +135,10 @@ func Load(workingDir, dataDir string, debug bool) (*ConfigStore, error) {
 	store.reloadMu.Lock()
 	defer store.reloadMu.Unlock()
 
-	if err := cfg.configureProviders(store, env, valueResolver, store.knownProviders); err != nil {
+	endConfigure := startuptrace.Span("srv.cfg.configure_providers")
+	err = cfg.configureProviders(store, env, valueResolver, store.knownProviders)
+	endConfigure()
+	if err != nil {
 		return nil, fmt.Errorf("failed to configure providers: %w", err)
 	}
 
@@ -1126,11 +1137,14 @@ func worktreeRoot(dir string) string {
 	worktreeRootCache.Lock()
 	if e, ok := worktreeRootCache.m[key]; ok && time.Since(e.at) < worktreeRootTTL {
 		worktreeRootCache.Unlock()
+		startuptrace.Count("cfg.worktree_root.cache_hit", 1)
 		return e.root
 	}
 	worktreeRootCache.Unlock()
 
+	endResolve := startuptrace.Span("cfg.worktree_root.resolve")
 	root := resolveWorktreeRoot(dir)
+	endResolve()
 	worktreeRootCache.Lock()
 	worktreeRootCache.m[key] = worktreeRootEntry{root: root, at: time.Now()}
 	worktreeRootCache.Unlock()

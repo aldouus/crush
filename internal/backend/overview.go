@@ -11,6 +11,7 @@ import (
 	"github.com/taigrr/crush/internal/proto"
 	"github.com/taigrr/crush/internal/registry"
 	"github.com/taigrr/crush/internal/session"
+	"github.com/taigrr/crush/internal/startuptrace"
 )
 
 // ListWorkspaceOverviews returns every known workspace and its top-level
@@ -39,6 +40,7 @@ func (b *Backend) ListWorkspaceOverviews(ctx context.Context) ([]proto.Workspace
 // listAllOverviews lists every session, including read-only replicas of
 // sessions owned by other cluster nodes.
 func (b *Backend) listAllOverviews(ctx context.Context) ([]proto.WorkspaceOverview, error) {
+	defer startuptrace.Span("srv.list_overviews")()
 	// Snapshot attached workspaces keyed by resolved root so registry
 	// entries for the same root are merged into the live view.
 	attached := make(map[string]*Workspace)
@@ -81,7 +83,10 @@ func (b *Backend) listAllOverviews(ctx context.Context) ([]proto.WorkspaceOvervi
 	// database marks that workspace unavailable instead of stalling the
 	// whole list.
 	if b.registry != nil {
+		endList := startuptrace.Span("srv.registry_list")
 		entries, err := b.registry.List()
+		endList()
+		startuptrace.Count("srv.registry_entries", len(entries))
 		if err != nil {
 			slog.Warn("Failed to list workspace registry", "error", err)
 		}
@@ -102,7 +107,10 @@ func (b *Backend) listAllOverviews(ctx context.Context) ([]proto.WorkspaceOvervi
 			seenDataDirs[dd] = struct{}{}
 			pending = append(pending, e)
 		}
+		startuptrace.Count("srv.peek_dbs", len(pending))
+		endPeek := startuptrace.Span("srv.peek_overviews")
 		out = append(out, b.peekOverviews(ctx, pending)...)
+		endPeek()
 	}
 
 	return out, nil
