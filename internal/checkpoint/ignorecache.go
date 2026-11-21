@@ -2,12 +2,14 @@ package checkpoint
 
 import (
 	"bufio"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/go-git/go-billy/v5/osfs"
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
 
 	"github.com/taigrr/crush/internal/startuptrace"
@@ -62,7 +64,14 @@ type ignoreStat struct {
 	size    int64
 }
 
+// errUnsafePath marks a walk that hit a path the cache will not touch
+// directly; callers fall back to the uncached go-git walk.
+var errUnsafePath = errors.New("unsafe ignore path")
+
 func statFingerprint(path string) ignoreStat {
+	if strings.Contains(path, "..") {
+		return ignoreStat{path: path, size: -1}
+	}
 	fi, err := os.Stat(path)
 	if err != nil {
 		return ignoreStat{path: path}
@@ -71,6 +80,9 @@ func statFingerprint(path string) ignoreStat {
 }
 
 func (s ignoreStat) fresh() bool {
+	if strings.Contains(s.path, "..") {
+		return false
+	}
 	return statFingerprint(s.path) == s
 }
 
@@ -108,6 +120,9 @@ func readIgnorePatterns(workTree string) ([]gitignore.Pattern, error) {
 	ps, err := e.walk(root, nil)
 	if err != nil {
 		ignoreCache.Delete(root)
+		if errors.Is(err, errUnsafePath) {
+			return walkIgnorePatterns(workTree)
+		}
 		return ps, err
 	}
 	e.patterns = ps
@@ -116,16 +131,18 @@ func readIgnorePatterns(workTree string) ([]gitignore.Pattern, error) {
 }
 
 func walkIgnorePatterns(workTree string) ([]gitignore.Pattern, error) {
-	e := &ignoreEntry{}
-	return e.walk(workTree, nil)
+	return gitignore.ReadPatterns(osfs.New(workTree), nil)
 }
 
-func (e *ignoreEntry) readFile(root string, path []string, name string) []gitignore.Pattern {
+func (e *ignoreEntry) readFile(root string, path []string, name string) ([]gitignore.Pattern, error) {
 	full := filepath.Join(append(append([]string{root}, path...), name)...)
+	if strings.Contains(full, "..") {
+		return nil, errUnsafePath
+	}
 	f, err := os.Open(full)
 	if err != nil {
 		e.stats = append(e.stats, statFingerprint(full))
-		return nil
+		return nil, nil
 	}
 	defer f.Close()
 	s := ignoreStat{path: full}
@@ -141,15 +158,25 @@ func (e *ignoreEntry) readFile(root string, path []string, name string) []gitign
 			ps = append(ps, gitignore.ParsePattern(line, path))
 		}
 	}
-	return ps
+	return ps, nil
 }
 
 // walk mirrors gitignore.ReadPatterns while recording fingerprints.
 func (e *ignoreEntry) walk(root string, path []string) ([]gitignore.Pattern, error) {
-	ps := e.readFile(root, path, filepath.Join(".git", "info", "exclude"))
-	ps = append(ps, e.readFile(root, path, ".gitignore")...)
+	ps, err := e.readFile(root, path, filepath.Join(".git", "info", "exclude"))
+	if err != nil {
+		return ps, err
+	}
+	more, err := e.readFile(root, path, ".gitignore")
+	if err != nil {
+		return ps, err
+	}
+	ps = append(ps, more...)
 
 	dir := filepath.Join(append([]string{root}, path...)...)
+	if strings.Contains(dir, "..") {
+		return ps, errUnsafePath
+	}
 	e.stats = append(e.stats, statFingerprint(dir))
 	entries, err := os.ReadDir(dir)
 	if err != nil {

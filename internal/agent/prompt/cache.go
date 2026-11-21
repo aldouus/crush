@@ -124,7 +124,11 @@ func resolveGitDirs(dir string) (gitDir, commonDir string) {
 	if strings.Contains(gitDir, "..") {
 		return gitDir, commonDir
 	}
-	if data, err := os.ReadFile(filepath.Join(gitDir, "commondir")); err == nil {
+	commonFile := filepath.Join(gitDir, "commondir")
+	if strings.Contains(commonFile, "..") {
+		return gitDir, commonDir
+	}
+	if data, err := os.ReadFile(commonFile); err == nil {
 		common := strings.TrimSpace(string(data))
 		if !filepath.IsAbs(common) {
 			common = filepath.Join(gitDir, common)
@@ -141,7 +145,11 @@ func gitFingerprint(dir string) string {
 	statKey(&sb, filepath.Join(gitDir, "index"))
 	statKey(&sb, filepath.Join(commonDir, "packed-refs"))
 	statKey(&sb, filepath.Join(commonDir, "refs", "heads"))
-	if head, err := os.ReadFile(filepath.Join(gitDir, "HEAD")); err == nil && !strings.Contains(gitDir, "..") {
+	headFile := filepath.Join(gitDir, "HEAD")
+	if strings.Contains(headFile, "..") {
+		return sb.String()
+	}
+	if head, err := os.ReadFile(headFile); err == nil {
 		if ref, ok := strings.CutPrefix(strings.TrimSpace(string(head)), "ref: "); ok && !strings.Contains(ref, "..") {
 			statKey(&sb, filepath.Join(commonDir, filepath.FromSlash(ref)))
 		}
