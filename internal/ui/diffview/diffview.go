@@ -734,6 +734,17 @@ func (dv *DiffView) hightlightCode(source string, bgColor color.Color) string {
 	}
 
 	l := dv.getChromaLexer()
+	sharedKey := sharedHighlightKey{
+		style:  dv.chromaStyle,
+		lexer:  lexerName(l),
+		source: source,
+	}
+	sharedKey.r, sharedKey.g, sharedKey.b, sharedKey.a = bgColor.RGBA()
+	if cached, ok := sharedHighlights.get(sharedKey); ok {
+		dv.syntaxCache[cacheKey] = cached
+		return cached
+	}
+
 	f := dv.getChromaFormatter(bgColor)
 
 	it, err := l.Tokenise(nil, source)
@@ -750,6 +761,7 @@ func (dv *DiffView) hightlightCode(source string, bgColor color.Color) string {
 
 	// Cache the result for future use
 	dv.syntaxCache[cacheKey] = result
+	sharedHighlights.put(sharedKey, result)
 
 	return result
 }

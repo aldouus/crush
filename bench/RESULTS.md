@@ -123,3 +123,27 @@
 - **Verdict**: REVERTED. The flatten step is not a measurable share of frame
   time (draw/render dominates); the old `Split`/`Join` output is tighter than
   a `Grow(len(s))` builder, so B/op got slightly worse.
+
+## Attempt 05: shared cross-instance diff highlight cache
+
+- **Hypothesis**: `DiffView.hightlightCode` re-lexes every line on each new
+  `DiffView` (the per-instance cache dies with the view), and tool-result
+  diffs are rebuilt on every re-render. Whole-file highlighting + slicing was
+  rejected: multi-line tokens (block comments, raw strings) would change
+  per-line output, breaking byte-identity. A bounded process-wide cache keyed
+  by (chroma style ptr, lexer name, bg RGBA, line source) is exact.
+- **Change**: `internal/ui/diffview/highlight_cache.go` (new, RWMutex map,
+  reset at 8192 entries), `internal/ui/diffview/diffview.go` (consult/fill it),
+  test `TestSharedHighlightCacheIdenticalOutput`.
+- **Load avg**: 2.38 (before) / 1.64 (after).
+
+| Benchmark | Before | After | Delta |
+|---|---|---|---|
+| DiffRender/unified time | 204.55 ms | 79.82 ms | -60.98% (p=0.000) |
+| DiffRender/split time | 238.5 ms | 121.0 ms | -49.27% (p=0.000) |
+| unified B/op, allocs | 21.92 MiB, 549.5k | 11.58 MiB, 314.8k | -47%, -43% |
+| split B/op, allocs | 29.06 MiB, 768.4k | 18.57 MiB, 533.4k | -36%, -31% |
+
+- **Verdict**: KEPT. Note the benchmark re-renders the same diff, so it
+  measures the warm (re-render) path; first render of a new diff is unchanged.
+  Output is byte-identical (same lexer/formatter, cached per exact input).
