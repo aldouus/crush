@@ -1000,3 +1000,13 @@ persistent private server is the correct tool here.
 - **Verdict**: KEPT (bounded caches + skills single fingerprint). Tests,
   `-race -count=3`, vet, golangci-lint clean on internal/agent/prompt and
   internal/checkpoint.
+
+## CI fix: TestDeviceBridgeStreamCredit -race hang (Ubuntu, PR100 @ 1c67674a)
+
+- Symptom: `go test -race ./...` timed out at 10m, stuck in `deviceStream.waitCredit` cond.Wait (devicebridge_test.go:649, the zero-credit lease case).
+- Root cause: inherited from origin/feature (code identical). `waitCredit` armed `time.AfterFunc(blocked)` *before* computing `deadline := now+blocked`, so the timer could fire before the deadline. The waiter woke, saw `Now < deadline`, and went back to `Wait` with nothing left to wake it, a lost wakeup. A slow, preempted CI runner widens the window.
+- Reproduction: not reproduced locally (count=30 on HEAD and on an origin/feature worktree; 600 runs at GOMAXPROCS=1 -race all passed; load ~2.5). The race follows from the ordering in the code.
+- Fix (internal/server/devicestream.go): the timer sets an `expired` flag under `s.mu` before broadcasting, and the loop checks that flag instead of comparing wall-clock times. Backpressure and stream semantics are unchanged.
+- Test: `TestDeviceStreamCreditTimeoutSurvivesEarlyWake` (spurious broadcasts before the lease expires; the stream must still end with `endCreditTimeout`).
+- Verification: -race targeted count=30 ok, full internal/server -race ok, vet ok, golangci-lint 0 issues.
+- Status: KEPT (bug fix, not a perf attempt).
