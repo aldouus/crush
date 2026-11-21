@@ -360,6 +360,18 @@ by fix 2 (peek fan-out, 3.1 s server list, ~200 ws unavailable). Fix 3
 (SQL LIMIT + index) and bounding the peer `local=1` fetch remain open; the
 peer fetch must stay full while device-session sync reads RemoteOverviews.
 
+### Status after attempt 34
+
+Fixes 2, 4 (sorted-cache half) and 5 landed: peeks run in a
+max(4, GOMAXPROCS) pool and fall back to the last listing marked stale;
+sorted overviews are cached per dbStamp; the registry is cached by file
+stat. Ready 100x5000 / 300x2000 / 300x5000: 1151 / 651 / 4005 ->
+370 / 399 / 1656 ms, server list_overviews at 300x5000 3159 -> 124 ms,
+unavailable 215 -> 0. Remaining at 300x5000: the cold first peek of all
+DBs (fix 3, SQL LIMIT), splitByOwner copying every session per request,
+JSON encode of the full (peer/mobile) response, and the unbounded peek
+cache (fix 7).
+
 ### Ranked fix list
 
 1. **Paginate/limit the overview**: per-workspace top-K sessions (busy, unread, favorites + newest K, e.g. 50) plus a total count; fetch more on expand/scroll. Cuts payload ~100x at M=5000 and removes the O(N*M) from ready. Highest impact.

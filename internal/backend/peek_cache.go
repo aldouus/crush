@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/taigrr/crush/internal/db"
+	"github.com/taigrr/crush/internal/proto"
 )
 
 // peekCache memoizes read-only session listings of detached workspaces,
@@ -30,6 +31,10 @@ type peekCache struct {
 type peekEntry struct {
 	stamp    string
 	sessions []db.PeekedSession
+	// overviews is sessions converted and sorted for the overview, built
+	// once per stamp. Shared by every caller: read-only.
+	overviews []proto.SessionOverview
+	at        time.Time
 }
 
 // dbStamp fingerprints a data directory's database files; any write
@@ -54,11 +59,36 @@ func (c *peekCache) get(ctx context.Context, dataDir string) ([]db.PeekedSession
 }
 
 func (c *peekCache) load(ctx context.Context, dataDir string) ([]db.PeekedSession, error) {
+	e, err := c.loadEntry(ctx, dataDir)
+	return e.sessions, err
+}
+
+// overviews returns dataDir's sessions in overview display order. When
+// the read fails but an earlier listing is cached, that listing is
+// returned with stale set (and the error), so a slow or contended read
+// degrades to old data instead of an empty workspace.
+func (c *peekCache) overviews(ctx context.Context, dataDir string) (ovs []proto.SessionOverview, staleSince time.Time, err error) {
+	e, err := guarded(ctx, &c.guard, filepath.Clean(dataDir), func(ctx context.Context) (peekEntry, error) {
+		return c.loadEntry(ctx, dataDir)
+	})
+	if err == nil {
+		return e.overviews, time.Time{}, nil
+	}
+	c.mu.Lock()
+	prev, ok := c.entries[dataDir]
+	c.mu.Unlock()
+	if !ok {
+		return nil, time.Time{}, err
+	}
+	return prev.overviews, prev.at, err
+}
+
+func (c *peekCache) loadEntry(ctx context.Context, dataDir string) (peekEntry, error) {
 	stamp := dbStamp(dataDir)
 	c.mu.Lock()
 	if e, ok := c.entries[dataDir]; ok && e.stamp == stamp {
 		c.mu.Unlock()
-		return e.sessions, nil
+		return e, nil
 	}
 	c.mu.Unlock()
 	peek := c.peek
@@ -67,15 +97,41 @@ func (c *peekCache) load(ctx context.Context, dataDir string) ([]db.PeekedSessio
 	}
 	sessions, err := peek(ctx, dataDir)
 	if err != nil {
-		return nil, err
+		return peekEntry{}, err
 	}
+	e := peekEntry{stamp: stamp, sessions: sessions, overviews: peekedOverviews(sessions), at: time.Now()}
 	c.mu.Lock()
 	if c.entries == nil {
 		c.entries = map[string]peekEntry{}
 	}
-	c.entries[dataDir] = peekEntry{stamp: stamp, sessions: sessions}
+	c.entries[dataDir] = e
 	c.mu.Unlock()
-	return sessions, nil
+	return e, nil
+}
+
+// peekedOverviews converts a detached workspace's sessions to sorted
+// overview entries.
+func peekedOverviews(peeked []db.PeekedSession) []proto.SessionOverview {
+	if len(peeked) == 0 {
+		return nil
+	}
+	out := make([]proto.SessionOverview, 0, len(peeked))
+	for _, p := range peeked {
+		out = append(out, proto.SessionOverview{
+			ID:         p.ID,
+			Title:      p.Title,
+			WorkingDir: p.WorkingDir,
+			UpdatedAt:  p.UpdatedAt,
+			IsBusy:     false, // not attached: no live state
+			Unread:     p.Unread(),
+			Color:      p.Color,
+			Animal:     p.Animal,
+			Favorite:   p.Favorite,
+			OwnerNode:  p.OwnerNode,
+		})
+	}
+	sortSessionOverviews(out)
+	return out
 }
 
 // reset drops every memoized listing.

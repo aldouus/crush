@@ -25,6 +25,7 @@
 | 31 | Final validation: repeated TUI attach FS/DB caching (+ bounded caches) | ready ms, f32dc805 vs final (reuse / reuse-teardown, small / large) | 228.7 / 324.2 / 302.3 / 765.3 | 165.6 / 191.7 / 165.7 / 196.8 | -28% / -41% / -45% / -74% | KEPT |
 | 32 | Scale baseline: hundreds of workspaces x thousands of sessions (baseline only) | ready / overview vs N x M | 10x200: 197 ms ready, 0.3 MB | 300x5000: 4357 ms ready, 75-111 MB, 136-189/300 ws unavailable | n/a | BASELINE |
 | 33 | Bounded workspace overview (top-50 sessions per workspace + session_count) | TUI ready ms (reuse, 10x200 / 100x2000 / 100x5000 / 300x2000 / 300x5000) | 190 / 1196 / 2696 / 3527 / 4460 | 188 / 341 / 571 / 620 / 4004 | -1% (ns) / -72% / -79% / -82% / -10% | KEPT |
+| 34 | Bounded peek fan-out + stale fallback, cached sorted overviews, in-memory registry | TUI ready ms (reuse, 10x200 / 100x2000 / 100x5000 / 300x2000 / 300x5000); unavailable @300x5000 | 190 / 376 / 1151 / 651 / 4005; 215 unavailable | 187 / 275 / 370 / 399 / 1656; 0 unavailable | -1% (ns) / -27% / -68% / -39% / -59% | KEPT |
 
 ## Attempt 01: Lazy gh/gh-stack probes
 
@@ -1089,3 +1090,48 @@ persistent private server is the correct tool here.
 - **Verdict**: KEPT. Large points improve 10-82% (p<0.01), 10x200 no
   regression. go test -race (backend, server, client, workspace, ui/model,
   proto), go vet, golangci-lint clean.
+
+## Attempt 34: Scale fixes 2+4+5 (peek pool + stale, cached sorted overviews, registry cache)
+
+- **Hypothesis**: at 300x5000 the unbounded per-workspace peek fan-out
+  contends until ~200 workspaces miss the 3 s stall guard; every request
+  also re-converts and re-sorts each cached listing and re-parses the
+  registry JSONL (with an O(n^2) insertion sort). A bounded pool, a
+  per-stamp sorted overview cache and an mtime-validated registry cache
+  should make the large points faster and the response complete.
+- **Change**: `internal/backend/overview.go` peekOverviews runs at most
+  max(4, GOMAXPROCS) reads at once; on error it serves the last cached
+  listing marked `stale`/`stale_since`/`last_error` (existing proto
+  fields) instead of `unavailable`. `internal/backend/peek_cache.go` stores
+  the converted, sorted `[]proto.SessionOverview` per dbStamp (shared,
+  read-only; slices clipped so appends copy; splitByOwner/mergeReplicas
+  already copy elements). `internal/registry/registry.go` caches the
+  deduped listing keyed by file size+mtime (cleared on Add/Compact, so
+  external appends by other processes are seen), returns clones, and
+  sorts with slices.SortFunc (same order). Tests: stale fallback, pool
+  bound + order, registry cache vs external appends/mutation.
+- **Method**: same fixture per point (bench/scale/gen -clone on
+  /Volumes/Store1/tmp, deleted after), HEAD and change binaries back to
+  back, `startup.py --mode reuse --probe 1`, 10 runs each, Mann-Whitney U.
+  Load avg 2.2-3.6. (Absolute HEAD numbers differ from attempt 33's run;
+  compare within the row.)
+
+| N x M | HEAD ready | new ready | delta | p | HEAD ovreq | new ovreq | HEAD srv list | new srv list | HEAD probe ms | new probe ms | HEAD unavail | new unavail | HEAD RSS after | new RSS after |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 10x200 | 190 | 187 | -1.4% | 0.4274 | 16 | 14 | 6 | 6 | 13 | 14 | 0 | 0 | 115 | 113 |
+| 100x2000 | 376 | 275 | -26.9% | 0.0002 | 204 | 110 | 126 | 38 | 507 | 467 | 0 | 0 | 452 | 436 |
+| 100x5000 | 1151 | 370 | -67.9% | 0.0002 | 885 | 204 | 391 | 72 | 1670 | 1297 | 0 | 0 | 666 | 695 |
+| 300x2000 | 651 | 399 | -38.7% | 0.0002 | 472 | 235 | 256 | 42 | 1903 | 1640 | 0 | 0 | 574 | 675 |
+| 300x5000 | 4005 | 1656 | -58.7% | 0.0002 | 3563 | 1053 | 3159 | 124 | 4975 | 4537 | 215 | 0 | 303 | 14 |
+
+"probe ms" is the full (unlimited) `GET /v1/workspace-overviews`, still
+dominated by encoding 500k+ sessions. The 300x5000 "new RSS after" of 14
+MB looks like a probe sampling artifact, not a real drop.
+
+Go bench `BenchmarkRegistryList` (GOMAXPROCS=4, count=10): 145 us / 893
+us / 2.87 ms / 13.4 ms -> 6.2 / 8.3 / 12.6 / 30.6 us at 10/100/300/1000
+workspaces (-96..-99.8%, p=0.000); allocs 108..15026 -> 3.
+
+- **Verdict**: KEPT. Large points -27..-68% (p=0.0002), 300x5000 now 0
+  unavailable (was 215), 10x200 unchanged (-1.4%, p=0.43). go test -race
+  (backend, registry, server, workspace), go vet, golangci-lint clean.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"sync"
@@ -138,40 +139,44 @@ func (b *Backend) listAllOverviews(ctx context.Context) ([]proto.WorkspaceOvervi
 	return out, nil
 }
 
-// peekOverviews reads detached workspaces' sessions concurrently,
-// preserving entries' order. Workspaces whose database could not be read
-// are kept and flagged so callers can tell "empty" from "unreadable".
+// peekOverviews reads detached workspaces' sessions with bounded
+// concurrency, preserving entries' order. Hundreds of simultaneous reads
+// contend for disk and CPU until most miss their deadline; a small pool
+// finishes them all sooner. Workspaces whose database could not be read
+// are kept and flagged so callers can tell "empty" from "unreadable", or
+// served from their last listing marked stale when one is cached.
+//
+// Sessions slices are shared with the cache: callers must not modify
+// their elements in place, and are clipped so appends copy.
 func (b *Backend) peekOverviews(ctx context.Context, entries []registry.Entry) []proto.WorkspaceOverview {
 	out := make([]proto.WorkspaceOverview, len(entries))
+	sem := make(chan struct{}, peekConcurrency())
 	var wg sync.WaitGroup
 	for i, e := range entries {
+		sem <- struct{}{}
 		wg.Go(func() {
+			defer func() { <-sem }()
 			ov := proto.WorkspaceOverview{Root: e.Root, DataDir: e.DataDir}
-			peeked, err := b.peekCache.get(ctx, e.DataDir)
-			if err != nil {
+			sessions, staleSince, err := b.peekCache.overviews(ctx, e.DataDir)
+			switch {
+			case err == nil:
+			case !staleSince.IsZero():
+				ov.Stale, ov.StaleSince, ov.LastError = true, staleSince.UnixMilli(), err.Error()
+			default:
 				slog.Debug("Failed to peek workspace sessions", "root", e.Root, "error", err)
 				ov.Unavailable, ov.Error = true, err.Error()
 			}
-			for _, p := range peeked {
-				ov.Sessions = append(ov.Sessions, proto.SessionOverview{
-					ID:         p.ID,
-					Title:      p.Title,
-					WorkingDir: p.WorkingDir,
-					UpdatedAt:  p.UpdatedAt,
-					IsBusy:     false, // not attached: no live state
-					Unread:     p.Unread(),
-					Color:      p.Color,
-					Animal:     p.Animal,
-					Favorite:   p.Favorite,
-					OwnerNode:  p.OwnerNode,
-				})
-			}
-			sortSessionOverviews(ov.Sessions)
+			ov.Sessions = slices.Clip(sessions)
 			out[i] = ov
 		})
 	}
 	wg.Wait()
 	return out
+}
+
+// peekConcurrency bounds simultaneous detached-workspace reads.
+func peekConcurrency() int {
+	return max(4, runtime.GOMAXPROCS(0))
 }
 
 // attachedSessionOverviews lists a live workspace's top-level sessions with
