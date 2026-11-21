@@ -170,3 +170,29 @@
 - **Verdict**: KEPT. Unified clears the bar; split improves allocs
   significantly and time is not regressed. The remaining Render cost is the
   per-line `Code.Width(...)` and content-style wraps, which depend on content.
+
+## Attempt 07: single-pass SSE envelope encoding in server
+
+- **Hypothesis**: `json.Marshal(*pubsub.Payload)` re-validates and
+  re-compacts (clones) the already-marshalled `json.RawMessage` payload, so
+  every streamed event pays for the full message twice. Writing the
+  envelope by hand and copying the payload verbatim removes that pass.
+- **Change**: `internal/server/events.go` (new `appendSSE`),
+  `internal/server/proto.go` (workspace + global SSE writers use it instead
+  of `json.Marshal` + `fmt.Fprintf`), `wire_bench_test.go` (bench mirrors
+  production), test `TestAppendSSEMatchesMarshal` asserts byte-identical
+  output vs `"data: "+json.Marshal(p)+"\n\n"` (incl. HTML-escaped content).
+  All payloads are produced locally by `json.Marshal`, so they are already
+  compact and escaped.
+- **Load avg**: 2.18 (before) / 3.52 (after).
+
+| Benchmark | Before | After | Delta |
+|---|---|---|---|
+| WireFullMessage time | 107.30 ms | 85.37 ms | -20.44% (p=0.000) |
+| WireFullMessage B/op | 42.63 MiB | 34.40 MiB | -19.31% (p=0.000) |
+| WireFullMessage allocs | 41.47k | 43.37k | +4.59% |
+| WireDeltas time | 2.684 ms | 2.742 ms | ~ (p=0.315) |
+
+- **Verdict**: KEPT. Large time and byte win on the full-message path
+  (measured under higher load after). Small alloc-count rise is the
+  per-event `json.Marshal(type)`; deltas unchanged.

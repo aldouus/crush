@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -387,12 +386,12 @@ func (c *controllerV1) handleGetWorkspaceEvents(w http.ResponseWriter, r *http.R
 			if wrapped == nil {
 				continue
 			}
-			data, err := json.Marshal(wrapped)
+			data, err := appendSSE(nil, wrapped)
 			if err != nil {
 				c.server.logError(r, "Failed to marshal event", "error", err)
 				continue
 			}
-			if _, err := fmt.Fprintf(out, "data: %s\n\n", data); err != nil {
+			if _, err := out.Write(data); err != nil {
 				c.server.logError(
 					r, "SSE write failed",
 					slog.String("workspace_id", id),
@@ -508,12 +507,12 @@ func (c *controllerV1) handleGetGlobalEvents(w http.ResponseWriter, r *http.Requ
 			if wrapped == nil {
 				continue
 			}
-			data, err := json.Marshal(wrapped)
+			data, err := appendSSE(nil, wrapped)
 			if err != nil {
 				c.server.logError(r, "Failed to marshal attention event", "error", err)
 				continue
 			}
-			if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+			if _, err := w.Write(data); err != nil {
 				c.server.logError(r, "Global attention SSE write failed", slog.String("error", err.Error()))
 				return
 			}
