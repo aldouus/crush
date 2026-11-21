@@ -1153,6 +1153,9 @@ var worktreeRootCache = struct {
 }{m: map[string]worktreeRootEntry{}}
 
 func resolveWorktreeRoot(dir string) string {
+	if !mayBeInGitRepo(dir) {
+		return ""
+	}
 	// One git call answers both questions; older git without
 	// --path-format fails it and falls back to separate calls.
 	if out, err := gitRevParse(dir, "--show-toplevel", "--path-format=absolute", "--git-common-dir"); err == nil {
@@ -1229,6 +1232,35 @@ func normalizePath(p string) string {
 		return resolved
 	}
 	return abs
+}
+
+// mayBeInGitRepo reports whether git could find a repository for dir.
+// It is false only when no git environment overrides are set and no
+// ancestor of dir contains a .git entry, in which case rev-parse would
+// fail anyway; skipping it saves a process spawn on startup.
+func mayBeInGitRepo(dir string) bool {
+	for _, env := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"} {
+		if os.Getenv(env) != "" {
+			return true
+		}
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return true
+	}
+	for {
+		if _, err := os.Lstat(filepath.Join(abs, ".git")); err == nil || !os.IsNotExist(err) {
+			return true
+		}
+		if strings.HasSuffix(abs, ".git") {
+			return true
+		}
+		parent := filepath.Dir(abs)
+		if parent == abs {
+			return false
+		}
+		abs = parent
+	}
 }
 
 // gitRevParse runs `git rev-parse <args...>` with cwd=dir and returns

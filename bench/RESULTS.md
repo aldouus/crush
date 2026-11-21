@@ -12,6 +12,7 @@
 | 12 | Cluster networking benchmark harness (baseline only) | cluster join/RPC/overview/reconnect/sync | see attempt 12 | n/a | n/a | BASELINE |
 | 14 | Startup DB-open path (investigation) | `BenchmarkConnectExisting` (200 sessions / 20k msgs) | 5.149 ms | n/a | n/a | REVERTED (nothing avoidable) |
 | 15 | Skip 25 ms readiness sleep on mesh start | `BenchmarkClusterMeshReconnect` / `ColdJoin` | 28.05 ms / 194.7 ms | 6.32 ms / 123.6 ms | -77.5% / -36.6% (p=0.000) | KEPT |
+| 16 | Skip `git rev-parse` fork when no `.git` ancestor | hyperfine `crush dirs` (non-repo cwd) | 162.3 ms +-12.3 | 116.2 ms +-10.6 | -28.4% | KEPT |
 
 ## Attempt 01: Lazy gh/gh-stack probes
 
@@ -430,3 +431,33 @@
   Survivor-side route redial (fixed 1 s NATS `routeConnectDelay`, not
   configurable) remains the next limit when the restarted peer cannot
   dial out; remaining cold-join cost is pairing (~110 ms).
+
+## Attempt 16: CLI cold-start re-profile; skip git fork outside repos
+
+- **Profile** (HEAD, `GODEBUG=inittrace=1`, startuptrace marks): `--version`
+  spends ~60 ms in package init, of which crush's own packages are ~6 ms
+  total; the rest is third-party (chroma lexers 22 ms + styles 14 ms via
+  `internal/ui/common`, nativeclipboard 4 ms, SDKs). `main` to exit is
+  ~1 ms for `--version`/`--help` (fang + cobra are cheap); the remainder
+  is exec/page-in of the 174 MB binary. Nothing in crush's cobra setup is
+  worth deferring for `--version`/`--help`. `dirs` costs ~40 ms more,
+  all in `projectBoundary` -> `git rev-parse` subprocess.
+- **Hypothesis**: when no ancestor of cwd has a `.git` entry (and no
+  GIT_DIR/GIT_WORK_TREE/GIT_COMMON_DIR override), rev-parse must fail, so
+  the fork can be skipped. Also helps TUI/server config load in non-repo
+  dirs.
+- **Change**: `internal/config/load.go` `mayBeInGitRepo` guard in
+  `resolveWorktreeRoot`; test `TestMayBeInGitRepo`.
+- **Results** (hyperfine -N, warmup 3, runs 30, temp HOME/XDG, cwd = mktemp dir):
+
+| Command | Before | After | Delta |
+|---|---|---|---|
+| `crush dirs` | 162.3 ms +-12.3 | 116.2 ms +-10.6 | -28.4% |
+| `crush --version` | 116.0 ms +-9.7 | 117.0 ms +-9.2 | noise (path unchanged) |
+| `crush --help` | 120.0 ms +-7.7 | 125.1 ms +-9.3 | noise (path unchanged) |
+
+- **Load avg**: 4.31 (start) / 4.09 (end).
+- **Verdict**: KEPT (dirs medians separated by 46 ms > 2x stddev).
+  `go test ./internal/config ./internal/cmd`, vet, lint clean. Inside a
+  git repo the fork still happens (unchanged). Further `--version` wins
+  need dropping chroma's eager init from the import graph (third-party).
