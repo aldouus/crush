@@ -179,9 +179,8 @@ func InitRepoAt(projectRoot, workTree string, cfg *Config) (*Repo, error) {
 
 	// Load .gitignore patterns from the work tree.
 	var ignorer gitignore.Matcher
-	workTreeFS := osfs.New(workTree)
 	endIgnore := startuptrace.Span("srv.checkpoint.read_gitignore_patterns")
-	patterns, err := gitignore.ReadPatterns(workTreeFS, nil)
+	patterns, err := readIgnorePatterns(workTree)
 	endIgnore()
 	startuptrace.Count("srv.checkpoint.gitignore_patterns", len(patterns))
 	if err == nil && len(patterns) > 0 {

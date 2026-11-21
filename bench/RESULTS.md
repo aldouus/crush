@@ -19,6 +19,7 @@
 | 21 | Long-poll join approval | `BenchmarkClusterJoinApprovalLatency` / `ColdJoin` | 1706 ms / 122.96 ms | 9.2 ms / 88.81 ms | -99.5% / -27.8% (p=0.000) | KEPT |
 | 24 | Read git HEAD instead of forking `git branch` on workspace open | warm workspace_created / first_frame / ready | 202.5 / 217.3 / 295.9 ms | 176.6 / 191.3 / 273.3 ms | -12.8% / -12.0% / -7.6% (p<1e-8) | KEPT |
 | 27 | Server-side cache of prompt git status + skills discovery | ready ms (reuse / reuse-teardown, small / large) | 288 / 356 / 448 / 698 | 195 / 236 / 217 / 520 | -32% / -34% / -52% / -26% | KEPT |
+| 28 | Process-wide cache of checkpoint gitignore patterns with stat revalidation | ready ms (reuse-teardown large / small) | 516.5 / 214.4 | 349.3 / 212.7 | -32.4% / -0.8% (noise) | KEPT |
 
 ## Attempt 01: Lazy gh/gh-stack probes
 
@@ -828,3 +829,32 @@
   (one git computation per attach instead of 7-12).
 - **Verdict**: KEPT.
 
+## Attempt 28: server-side cache of the checkpoint gitignore matcher
+
+- **Hypothesis**: `checkpoint.InitRepoAt` re-runs `gitignore.ReadPatterns`
+  (full ReadDir walk + parse, ~278 ms on the large fixture) on every
+  workspace build. Caching patterns per cleaned absolute work tree and
+  revalidating with stats only (each walked dir's mtime, each probed
+  `.gitignore` / `.git/info/exclude` path's existence+mtime+size) skips
+  ReadDir/parse on relaunch while staying exact.
+- **Change**: `internal/checkpoint/ignorecache.go` (own re-implementation of
+  ReadPatterns that records fingerprints; `sync.Map` cache; `..` guard),
+  `internal/checkpoint/repo.go` uses it. Tests in `ignorecache_test.go`
+  compare against go-git's `ReadPatterns` on hit and after edit, add (in
+  existing and new dirs), remove (re-exposing a previously ignored dir's
+  `.gitignore`), and exclude-file edit.
+- **Results** (bench/startup.py, 16 runs, old/new back to back, load
+  5.3 -> 1.9):
+
+  | fixture / mode | old ready | new ready | delta | gitignore span old / new |
+  |---|---|---|---|---|
+  | large reuse-teardown | 516.5 +- 21.8 | 349.3 +- 37.0 | -32.4% | 277.9 / 116.3 ms |
+  | small reuse-teardown | 214.4 +- 7.5 | 212.7 +- 21.5 | noise | 0.53 / 0.43 ms |
+  | large reuse | 202.7 +- 24.8 | 201.4 +- 19.1 | noise | n/a |
+  | small reuse | 185.8 +- 21.2 | 189.8 +- 16.9 | noise | n/a |
+
+  Large reuse-teardown gap (167 ms) exceeds 2x the larger stddev (74 ms).
+  Revalidation still costs ~116 ms of stats on the large tree; a watcher
+  or moving it off the critical path would be the next step.
+- **Verdict**: KEPT. `go test -race`, vet, golangci-lint clean on
+  internal/checkpoint.
