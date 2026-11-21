@@ -100,7 +100,52 @@ func (e *ignoreEntry) fresh() bool {
 	return true
 }
 
-var ignoreCache sync.Map // cleaned absolute work tree -> *ignoreEntry
+// ignoreCacheMaxEntries bounds memory for servers that open many work trees.
+const ignoreCacheMaxEntries = 128
+
+// ignoreCacheStore maps a cleaned absolute work tree to its *ignoreEntry.
+type ignoreCacheStore struct {
+	mu      sync.Mutex
+	entries map[string]*ignoreEntry
+}
+
+func (s *ignoreCacheStore) Load(root string) (*ignoreEntry, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.entries[root]
+	return e, ok
+}
+
+func (s *ignoreCacheStore) Store(root string, e *ignoreEntry) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.entries == nil {
+		s.entries = map[string]*ignoreEntry{}
+	}
+	if _, ok := s.entries[root]; !ok {
+		for k := range s.entries {
+			if len(s.entries) < ignoreCacheMaxEntries {
+				break
+			}
+			delete(s.entries, k)
+		}
+	}
+	s.entries[root] = e
+}
+
+func (s *ignoreCacheStore) Delete(root string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.entries, root)
+}
+
+func (s *ignoreCacheStore) Len() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.entries)
+}
+
+var ignoreCache ignoreCacheStore
 
 // readIgnorePatterns returns the same patterns as
 // gitignore.ReadPatterns(osfs.New(workTree), nil), reusing a process-wide
@@ -110,8 +155,7 @@ func readIgnorePatterns(workTree string) ([]gitignore.Pattern, error) {
 	if err != nil || strings.Contains(root, "..") {
 		return walkIgnorePatterns(workTree)
 	}
-	if v, ok := ignoreCache.Load(root); ok {
-		e := v.(*ignoreEntry)
+	if e, ok := ignoreCache.Load(root); ok {
 		if e.fresh() {
 			return e.patterns, nil
 		}

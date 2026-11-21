@@ -5,6 +5,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -69,6 +72,7 @@ func TestCachedGitStatusTTL(t *testing.T) {
 	base := time.Now()
 	c := newInputCache[string]()
 	c.now = func() time.Time { return base }
+	c.refingerprint = gitStatusCache.refingerprint
 	calls := 0
 	get := func() string {
 		return c.get(dir, func() string { return gitFingerprint(dir) }, func() string {
@@ -100,4 +104,86 @@ func TestCachedDiscoverSkillsInvalidates(t *testing.T) {
 
 	writeSkill("beta")
 	require.Len(t, cachedDiscoverSkills(paths), 2)
+}
+
+func TestInputCacheCoalescesConcurrentMisses(t *testing.T) {
+	c := newInputCache[int]()
+	var calls atomic.Int32
+	release := make(chan struct{})
+	var wg sync.WaitGroup
+	results := make([]int, 16)
+	for i := range results {
+		wg.Go(func() {
+			results[i] = c.get("id", func() string { return "k" }, func() int {
+				calls.Add(1)
+				<-release
+				return 42
+			})
+		})
+	}
+	require.Eventually(t, func() bool { return calls.Load() == 1 }, time.Second, time.Millisecond)
+	time.Sleep(20 * time.Millisecond)
+	close(release)
+	wg.Wait()
+	require.Equal(t, int32(1), calls.Load())
+	for _, r := range results {
+		require.Equal(t, 42, r)
+	}
+}
+
+func TestInputCacheBounded(t *testing.T) {
+	c := newInputCache[int]()
+	for i := range inputCacheMaxEntries * 4 {
+		c.get(strconv.Itoa(i), func() string { return "k" }, func() int { return i })
+	}
+	require.LessOrEqual(t, len(c.entries), inputCacheMaxEntries)
+	require.Equal(t, 7, c.get("7x", func() string { return "k" }, func() int { return 7 }))
+}
+
+func TestCachedGitStatusLinkedWorktree(t *testing.T) {
+	dir := newRepo(t)
+	wt := filepath.Join(t.TempDir(), "wt")
+	gitRun(t, dir, "worktree", "add", "-q", "-b", "side", wt)
+	ctx := context.Background()
+	require.Contains(t, cachedGitStatus(ctx, wt), "Current branch: side")
+	require.Contains(t, cachedGitStatus(ctx, dir), "Current branch: main")
+
+	require.NoError(t, os.WriteFile(filepath.Join(wt, "b.txt"), []byte("b"), 0o644))
+	gitRun(t, wt, "add", ".")
+	gitRun(t, wt, "commit", "-q", "-m", "side commit")
+	require.Equal(t, getGitStatus(ctx, wt), cachedGitStatus(ctx, wt))
+
+	// A commit on main via the main checkout updates the shared ref.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "c.txt"), []byte("c"), 0o644))
+	gitRun(t, dir, "add", ".")
+	gitRun(t, dir, "commit", "-q", "-m", "main commit")
+	require.Equal(t, getGitStatus(ctx, dir), cachedGitStatus(ctx, dir))
+	require.Equal(t, getGitStatus(ctx, wt), cachedGitStatus(ctx, wt))
+}
+
+func TestCachedDiscoverSkillsEditsAndDeletes(t *testing.T) {
+	root := t.TempDir()
+	write := func(name, desc string) {
+		d := filepath.Join(root, name)
+		require.NoError(t, os.MkdirAll(d, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(d, "SKILL.md"),
+			[]byte("---\nname: "+name+"\ndescription: "+desc+"\n---\nbody\n"), 0o644))
+	}
+	write("alpha", "one")
+	write("beta", "two")
+	paths := []string{root}
+	require.Len(t, cachedDiscoverSkills(paths), 2)
+
+	write("alpha", "a much longer description")
+	got := cachedDiscoverSkills(paths)
+	require.Len(t, got, 2)
+	descs := []string{got[0].Description, got[1].Description}
+	require.Contains(t, descs, "a much longer description")
+
+	require.NoError(t, os.RemoveAll(filepath.Join(root, "beta")))
+	require.Len(t, cachedDiscoverSkills(paths), 1)
+
+	other := t.TempDir()
+	require.Empty(t, cachedDiscoverSkills([]string{other}))
+	require.Len(t, cachedDiscoverSkills(paths), 1)
 }

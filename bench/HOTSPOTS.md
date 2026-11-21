@@ -225,3 +225,20 @@ down (2 min after the last TUI quits), so a later launch pays `cold`
 Not hot: config lookup/parse (<1 ms), DB open of an existing DB (4 ms),
 registry list (0.4 ms), overview peeks of 8x200-session DBs (3 ms),
 client-side command loading (0.1-3 ms).
+
+## Final validation: repeated TUI attach FS/DB caching
+
+See RESULTS.md attempt 31 for the full table. Ready (2..N, n=20) f32dc805
+-> final: small reuse 228.7 -> 165.6 ms, small reuse-teardown 324.2 ->
+191.7, large reuse 302.3 -> 165.7, large reuse-teardown 765.3 -> 196.8.
+
+Invalidation rules:
+- Prompt git status: HEAD, index, packed-refs, refs/heads, current ref
+  (worktree `.git` pointer + `commondir` followed), plus 5 s TTL.
+- Prompt skills: each root's stat, entry stats, and each child's SKILL.md
+  stat, plus 5 s TTL.
+- Checkpoint gitignore: mtime+size of every walked dir and probed
+  `.gitignore`/`info/exclude`; no TTL; revalidated in background, first
+  snapshot waits.
+- Caches bounded (256 prompt entries, 128 work trees).
+- DB discovery (~3 ms) intentionally uncached.

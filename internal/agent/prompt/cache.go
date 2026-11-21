@@ -20,6 +20,10 @@ import (
 // nested dirs, so the fingerprint alone cannot catch every change.
 const inputCacheTTL = 5 * time.Second
 
+// inputCacheMaxEntries bounds per-cache memory for servers that host many
+// workspaces; expired entries are pruned first, then arbitrary ones.
+const inputCacheMaxEntries = 256
+
 type cachedInput[T any] struct {
 	key   string
 	at    time.Time
@@ -35,6 +39,9 @@ type inputCache[T any] struct {
 	entries map[string]cachedInput[T]
 	group   singleflight.Group
 	now     func() time.Time
+	// refingerprint re-reads the fingerprint after compute, for inputs
+	// that compute itself mutates (git status refreshes .git/index).
+	refingerprint bool
 }
 
 func newInputCache[T any]() *inputCache[T] {
@@ -53,16 +60,37 @@ func (c *inputCache[T]) get(id string, fingerprint func() string, compute func()
 	v, _, _ := c.group.Do(id+"\x00"+key, func() (any, error) {
 		start := c.now()
 		value := compute()
-		// Re-fingerprint: computing can itself touch the inputs (git
-		// status refreshes .git/index). TTL bounds any change that
-		// raced with compute.
-		after := fingerprint()
+		// Otherwise keep the pre-compute key so a change racing with
+		// compute forces the next call to recompute.
+		after := key
+		if c.refingerprint {
+			after = fingerprint()
+		}
 		c.mu.Lock()
+		c.pruneLocked(id)
 		c.entries[id] = cachedInput[T]{key: after, at: start, value: value}
 		c.mu.Unlock()
 		return value, nil
 	})
 	return v.(T)
+}
+
+func (c *inputCache[T]) pruneLocked(id string) {
+	if _, ok := c.entries[id]; ok || len(c.entries) < inputCacheMaxEntries {
+		return
+	}
+	now := c.now()
+	for k, e := range c.entries {
+		if now.Sub(e.at) >= inputCacheTTL {
+			delete(c.entries, k)
+		}
+	}
+	for k := range c.entries {
+		if len(c.entries) < inputCacheMaxEntries {
+			break
+		}
+		delete(c.entries, k)
+	}
 }
 
 func (c *inputCache[T]) reset() {
@@ -72,7 +100,11 @@ func (c *inputCache[T]) reset() {
 }
 
 var (
-	gitStatusCache = newInputCache[string]()
+	gitStatusCache = func() *inputCache[string] {
+		c := newInputCache[string]()
+		c.refingerprint = true
+		return c
+	}()
 	userSkillCache = newInputCache[[]*skills.Skill]()
 )
 

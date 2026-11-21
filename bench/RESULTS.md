@@ -22,6 +22,7 @@
 | 28 | Process-wide cache of checkpoint gitignore patterns with stat revalidation | ready ms (reuse-teardown large / small) | 516.5 / 214.4 | 349.3 / 212.7 | -32.4% / -0.8% (noise) | KEPT |
 | 29 | Revalidate cached checkpoint gitignore in background; first snapshot waits | ready ms (reuse-teardown large / small) | 346.8 / 216.8 | 236.7 / 216.8 | -31.7% / 0% (noise) | KEPT |
 | 30 | Prefetch workspace overviews at UI Init instead of inside the Cmd | ready ms (reuse large / reuse-teardown large) | 203.9 / 234.6 | 170.2 / 199.1 | -16.5% / -15.1% | KEPT |
+| 31 | Final validation: repeated TUI attach FS/DB caching (+ bounded caches) | ready ms, f32dc805 vs final (reuse / reuse-teardown, small / large) | 228.7 / 324.2 / 302.3 / 765.3 | 165.6 / 191.7 / 165.7 / 196.8 | -28% / -41% / -45% / -74% | KEPT |
 
 ## Attempt 01: Lazy gh/gh-stack probes
 
@@ -919,3 +920,83 @@
   frame unchanged everywhere. Remaining gap is Bubble Tea's own startup
   messages each followed by a full View (~3 ms each).
 - **Verdict**: KEPT. vet, golangci-lint, tests clean on internal/ui/model.
+
+## Attempt 31: Final validation: repeated TUI attach FS/DB caching
+
+Scope: attempts 27-30 (prompt input cache, checkpoint gitignore cache,
+background gitignore revalidation, overview prefetch) reviewed against
+baseline f32dc805. Raw data: `bench/out/attach-final/`. Runners:
+`bench/attach-final-bench.sh` (micro, temp baseline worktree with
+uncached shims so benchmark names/data are identical) and
+`bench/attach-final-summary.py` (pools e2e raw runs).
+
+### Review findings and fixes
+
+- **Unbounded growth** (fixed): `inputCache` and the checkpoint
+  `ignoreCache` grew one entry per workspace path forever. Prompt caches
+  now cap at 256 entries (expired pruned first, then arbitrary); the
+  gitignore cache is a mutex map capped at 128 work trees.
+- **Skills miss overhead** (fixed): skills fingerprint was taken twice per
+  miss. Only git status re-fingerprints after compute (git status
+  refreshes `.git/index`); skills keep the pre-compute key, which is also
+  safer (a change racing with compute forces a recompute).
+  SkillsMissTTL went 2.118 ms -> 1.759 ms.
+- Verified (tests added): concurrent cold callers coalesce to one compute
+  (`TestInputCacheCoalescesConcurrentMisses`); linked worktrees resolve
+  `.git` pointer + `commondir`, per-worktree HEAD/index and shared refs
+  invalidate (`TestCachedGitStatusLinkedWorktree`); SKILL.md edits, skill
+  dir deletion, distinct path sets don't cross-contaminate
+  (`TestCachedDiscoverSkillsEditsAndDeletes`); gitignore errors are not
+  cached (`TestReadIgnorePatternsErrorNotSticky`); new nested
+  `.gitignore` / removed subtree invalidate
+  (`TestReadIgnorePatternsNewNestedIgnore`); first snapshot always waits
+  for background revalidation (existing test). The revalidation goroutine
+  is bounded by one stat walk and always closes `done`, so an unused Repo
+  leaks nothing beyond that walk.
+- Freshness windows / risks: prompt inputs may be stale up to
+  `inputCacheTTL` = 5 s for changes the fingerprint can't see (unstaged
+  work-tree edits, edits deep inside a skill dir other than SKILL.md).
+  Gitignore cache has no TTL; it relies on mtime+size of every walked dir
+  and probed ignore file (same-size edit within one mtime tick would be
+  missed; APFS/ext4 are ns). Paths containing `..` bypass caching
+  (CodeQL guard). Skills slice is shallow-cloned; callers do not mutate
+  `*Skill`.
+- Not cached on purpose: DB discovery/open (~3 ms per attach).
+
+### Micro (GOMAXPROCS=4, -count=10, load 1.8-7.2 during run)
+
+| Benchmark | f32dc805 | final | delta (p) |
+|-----------|---------:|------:|-----------|
+| PromptGitStatusHit | 79.5 ms | 99.1 us | -99.9% (0.000) |
+| PromptGitStatusMissTTL (invalidated every iter) | 76.6 ms | 80.5 ms | ~ (0.353) |
+| PromptGitStatusParallelColdBurst (8 callers, invalidated) | 157.8 ms | 79.3 ms | -49.7% (0.000), coalesced |
+| PromptSkillsHit | 1.302 ms | 0.399 ms | -69.3% (0.000) |
+| PromptSkillsMissTTL | 1.287 ms | 1.759 ms | +36.8% (0.000), fingerprint cost on a pure miss |
+| CheckpointReopen | 13.41 ms | 0.616 ms | -95.4% (0.000) |
+| CheckpointReopenFirstSnapshot | 89.4 ms | 81.1 ms | -9.4% (0.003) |
+
+### End-to-end (`bench/startup.py`, 2 interleaved rounds x 10 runs = n=20 per cell, warmup = 1st launch)
+
+| fixture/mode | bin | first_frame | ready (2..N) | 1st launch ready | prompt.build ms/run (calls) | gitignore ms |
+|---|---|---:|---:|---:|---:|---:|
+| small/reuse | base | 138.8 +-11.5 | 228.7 +-25.9 | 534 | 883 (7) | 0 |
+| small/reuse | final | 134.4 +-6.5 | 165.6 +-7.8 | 376 | 17.4 (7) | 0 |
+| small/reuse-teardown | base | 200.3 +-20.7 | 324.2 +-44.0 | 420 | 2432 (12) | 0.55 |
+| small/reuse-teardown | final | 161.0 +-13.6 | 191.7 +-15.5 | 352 | 33.3 (12) | 0.49 |
+| large/reuse | base | 141.1 +-14.1 | 302.3 +-45.9 | 899 | 1874 (7) | 0 |
+| large/reuse | final | 133.8 +-13.7 | 165.7 +-16.9 | 531 | 18.7 (7) | 0 |
+| large/reuse-teardown | base | 484.4 +-24.0 | 765.3 +-51.5 | 831 | 5251 (12) | 285 |
+| large/reuse-teardown | final | 162.9 +-17.6 | 196.8 +-24.3 | 538 | 41.3 (12) | 128 (background) |
+
+prompt.build is summed over parallel builds per run (wall-clock overlap).
+Load avg 1.6-5.7 (see `e2e-load.txt`). All ready deltas exceed 2x the
+larger stddev.
+
+hyperfine not used: the TUI never exits on its own and its "ready" point
+is only observable via `CRUSH_STARTUP_TRACE` inside a PTY, so hyperfine
+would time process kill latency, not attach. The PTY phase harness with a
+persistent private server is the correct tool here.
+
+- **Verdict**: KEPT (bounded caches + skills single fingerprint). Tests,
+  `-race -count=3`, vet, golangci-lint clean on internal/agent/prompt and
+  internal/checkpoint.

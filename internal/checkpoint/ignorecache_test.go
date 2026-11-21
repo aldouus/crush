@@ -3,6 +3,7 @@ package checkpoint
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -121,4 +122,38 @@ func TestInitRepoFirstSnapshotWaitsForIgnoreRevalidation(t *testing.T) {
 	require.NoError(t, r.RestoreSnapshot(hash, out))
 	require.FileExists(t, filepath.Join(out, "a", "x.txt"))
 	require.NoFileExists(t, filepath.Join(out, "bb", "y.txt"))
+}
+
+func TestIgnoreCacheBounded(t *testing.T) {
+	var s ignoreCacheStore
+	for i := range ignoreCacheMaxEntries * 3 {
+		s.Store(filepath.Join("/x", strconv.Itoa(i)), &ignoreEntry{})
+	}
+	require.LessOrEqual(t, s.Len(), ignoreCacheMaxEntries)
+	s.Store("/keep", &ignoreEntry{})
+	_, ok := s.Load("/keep")
+	require.True(t, ok)
+}
+
+func TestReadIgnorePatternsErrorNotSticky(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join(t.TempDir(), "missing")
+	_, err := readIgnorePatterns(dir)
+	require.Error(t, err)
+	require.False(t, hasCachedIgnore(dir))
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("x\n"), 0o644))
+	requireMatchesFresh(t, dir)
+	require.True(t, hasCachedIgnore(dir))
+}
+
+func TestReadIgnorePatternsNewNestedIgnore(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeIgnoreFixture(t, dir)
+	requireMatchesFresh(t, dir)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "c", "d", ".gitignore"), []byte("x.txt\n"), 0o644))
+	requireMatchesFresh(t, dir)
+	require.NoError(t, os.RemoveAll(filepath.Join(dir, "a", "b")))
+	requireMatchesFresh(t, dir)
 }
