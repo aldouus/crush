@@ -704,3 +704,34 @@
   lint clean.
 - **Verdict**: KEPT. Next biggest: fresh-DB migrations (~35 ms, first
   open of a project only).
+
+## Attempt 25: survivor-side route re-solicit for one-sided reconnects
+
+- **Hypothesis**: when a restarted peer cannot dial out, survivors only
+  redial it on nats-server's fixed 1 s explicit-route reconnect delay
+  (`routeReconnectDelay`/`routeConnectDelay`, not exposed in
+  `server.Options` v2.15.2). Crush gets no peer-up signal in this case
+  (the peer cannot reach us over HTTP either), so survivors must probe:
+  a member with no route whose mesh port accepts TCP gets its route URL
+  removed and re-added via `ReloadOptions`, which makes nats-server
+  solicit it immediately.
+- **Change**: `internal/cluster/mesh.go`: per-mesh `redialLoop` (100 ms
+  tick) maps connected routes by `RemoteName` (= node ID), TCP-probes
+  missing members' mesh addresses (100 ms timeout), and re-solicits at
+  most once per second per address. Stopped in `Close`. New benchmark
+  `BenchmarkClusterMeshReconnectOneSided` (restarted node's own route
+  URLs point at a dead port).
+- **Results** (GOMAXPROCS=4, count=10, benchtime=10x, benchstat):
+
+| Benchmark | Before | After | Delta |
+|---|---|---|---|
+| ClusterMeshReconnectOneSided time/op | 512.0 ms +-20% | 219.3 ms +-2% | -57.2% (p=0.000) |
+| ClusterMeshReconnectOneSided p99 | 1005.9 ms | 811.9 ms | -19.3% (p=0.000) |
+| ClusterMeshReconnectOneSided allocs/op | 22.98k | 17.75k | -22.8% (p=0.001) |
+| ClusterMeshReconnect time/op | 6.57 ms | 6.76 ms | ~ (p=0.853) |
+
+- **Load avg**: 1.95 (start) / 1.37 (end).
+- **Verdict**: KEPT. `go test -race -count=3 ./internal/cluster
+  ./internal/server`, vet, lint clean. Residual tail (~0.8 s p99) comes
+  from iterations where the 1 s re-solicit cooldown or a duplicate-route
+  race defers to the stock redial.

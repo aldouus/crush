@@ -269,6 +269,44 @@ func BenchmarkClusterMeshReconnect(b *testing.B) {
 	reportLatency(b, samples)
 }
 
+// BenchmarkClusterMeshReconnectOneSided is BenchmarkClusterMeshReconnect
+// when the restarted peer cannot dial out: its own route URLs point at a
+// dead port, so only the survivors' redials can restore the mesh.
+func BenchmarkClusterMeshReconnectOneSided(b *testing.B) {
+	nodes, addrs, meshes := startTrioMesh(b)
+	self := nodes[2].id.ID
+	require.NoError(b, nodes[2].store.Update(func(st *State) error {
+		for i := range st.Members {
+			if st.Members[i].NodeID != self {
+				st.Members[i].Endpoints = []Endpoint{{Kind: EndpointNATS, Addr: "127.0.0.1:1"}}
+			}
+		}
+		return nil
+	}))
+	var samples []time.Duration
+	for b.Loop() {
+		b.StopTimer()
+		meshes[2].Close()
+		deadline := time.Now().Add(30 * time.Second)
+		for _, m := range meshes[:2] {
+			for peerCount(m) > 1 {
+				if time.Now().After(deadline) {
+					b.Fatal("route to stopped peer never dropped")
+				}
+				time.Sleep(time.Millisecond)
+			}
+		}
+		b.StartTimer()
+		start := time.Now()
+		m, err := nodes[2].StartMesh(addrs[2])
+		require.NoError(b, err)
+		meshes[2] = m
+		waitRoutes(b, meshes, 2)
+		samples = append(samples, time.Since(start))
+	}
+	reportLatency(b, samples)
+}
+
 // BenchmarkClusterMeshThroughput measures 1 KiB publishes from node 0 to
 // a subscriber on node 2, flushed end to end per batch.
 func BenchmarkClusterMeshThroughput(b *testing.B) {
