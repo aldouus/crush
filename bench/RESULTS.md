@@ -1263,3 +1263,5 @@ workspaces (-96..-99.8%, p=0.000); allocs 108..15026 -> 3.
   claimed as a win; likely run-to-run variance in the stale/peek path.
 - **Verdict**: KEPT as correctness fix. go test -race (backend,
   ui/model), go vet, golangci-lint clean.
+
+- CI fix (not an attempt): TestIgnoreCacheLRU now builds Load keys with filepath.Join so it passes on Windows; prompt TestInputCacheLRU and other attempt 32-37 tests checked, no path-separator issues found.

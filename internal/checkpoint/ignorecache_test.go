@@ -163,12 +163,12 @@ func TestIgnoreCacheLRU(t *testing.T) {
 	for i := range ignoreCacheMaxEntries {
 		s.Store(filepath.Join("/x", strconv.Itoa(i)), &ignoreEntry{})
 	}
-	_, ok := s.Load("/x/0")
+	_, ok := s.Load(filepath.Join("/x", "0"))
 	require.True(t, ok)
 	s.Store("/new", &ignoreEntry{})
-	_, ok = s.Load("/x/0")
+	_, ok = s.Load(filepath.Join("/x", "0"))
 	require.True(t, ok)
-	_, ok = s.Load("/x/1")
+	_, ok = s.Load(filepath.Join("/x", "1"))
 	require.False(t, ok)
 	require.Equal(t, ignoreCacheMaxEntries, s.Len())
 }
