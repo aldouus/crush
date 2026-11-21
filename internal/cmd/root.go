@@ -37,6 +37,7 @@ import (
 	"github.com/taigrr/crush/internal/proto"
 	"github.com/taigrr/crush/internal/server"
 	"github.com/taigrr/crush/internal/session"
+	"github.com/taigrr/crush/internal/startuptrace"
 	"github.com/taigrr/crush/internal/ui/anim"
 	"github.com/taigrr/crush/internal/ui/common"
 	ui "github.com/taigrr/crush/internal/ui/model"
@@ -156,6 +157,7 @@ crush skill print
 		}
 		program := tea.NewProgram(model, opts...)
 		go ws.Subscribe(program)
+		startuptrace.Mark("program_start")
 
 		if _, err := program.Run(); err != nil {
 			slog.Error("TUI run error", "error", err)
@@ -278,6 +280,7 @@ func setupClientServerWorkspace(cmd *cobra.Command) (workspace.Workspace, func()
 		}
 	}
 
+	startuptrace.Mark("agent_init")
 	return clientWs, cleanupServer, nil
 }
 
@@ -302,6 +305,7 @@ func connectToServerAt(cmd *cobra.Command, cwd string, opts ...func(*proto.Works
 	if err := ensureServer(cmd, hostURL); err != nil {
 		return nil, nil, nil, err
 	}
+	startuptrace.Mark("server_ready")
 
 	debug, _ := cmd.Flags().GetBool("debug")
 	yolo, _ := cmd.Flags().GetBool("yolo")
@@ -328,6 +332,7 @@ func connectToServerAt(cmd *cobra.Command, cwd string, opts ...func(*proto.Works
 	stopNotice := noticeWhileWaiting(ctx, "the crush server to open the workspace at "+cwd)
 	ws, err := c.CreateWorkspace(ctx, wsReq)
 	stopNotice()
+	startuptrace.Mark("workspace_created")
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to create workspace: %v", err)
 	}

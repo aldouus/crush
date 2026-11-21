@@ -28,6 +28,7 @@ import (
 	"github.com/taigrr/crush/internal/question"
 	"github.com/taigrr/crush/internal/session"
 	"github.com/taigrr/crush/internal/skills"
+	"github.com/taigrr/crush/internal/startuptrace"
 	"github.com/taigrr/crush/internal/ui/common"
 	"github.com/taigrr/crush/internal/ui/completions"
 	"github.com/taigrr/crush/internal/ui/dialog"
@@ -412,6 +413,7 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case cancelTimerExpiredMsg:
 		m.handleCancelTimerExpired(msg)
 	case workspaceOverviewsMsg:
+		startuptrace.Mark("overviews_loaded")
 		m.leftSidebar.SetOverviews(msg.overviews)
 		m.leftSidebar.SetCurrentRoot(m.com.Workspace.BaseDir())
 		if m.session != nil {

@@ -71,6 +71,12 @@ RUNS=30
 	--command-name help "$BIN --help" \
 	--command-name dirs "$BIN dirs" | tee "$OUT/hyperfine.txt"
 
+echo "==> interactive startup (cold + warm server)"
+SRUNS=15
+[[ "$QUICK" == "-quick" ]] && SRUNS=3
+python3 "$ROOT/bench/startup.py" "$BIN" "$SRUNS" --json "$OUT/startup-cold.json" | tee "$OUT/startup-cold.txt"
+python3 "$ROOT/bench/startup.py" "$BIN" "$SRUNS" --warm --json "$OUT/startup-warm.json" | tee "$OUT/startup-warm.txt"
+
 echo "==> go test -bench (count=$COUNT)"
 (cd "$ROOT" && go test -run '^$' -bench "$BENCH_RE" -benchmem \
 	-count="$COUNT" -benchtime="$BENCHTIME" -timeout 60m "${BENCH_PKGS[@]}") |

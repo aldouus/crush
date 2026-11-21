@@ -19,6 +19,7 @@ import (
 	"github.com/taigrr/crush/internal/config"
 	crushlog "github.com/taigrr/crush/internal/log"
 	"github.com/taigrr/crush/internal/server"
+	"github.com/taigrr/crush/internal/startuptrace"
 	"github.com/taigrr/crush/internal/update"
 	"github.com/taigrr/crush/internal/version"
 )
@@ -118,6 +119,7 @@ var serverCmd = &cobra.Command{
 		sigs = append(sigs, addSignals(sigs)...)
 		signal.Notify(sigch, sigs...)
 
+		startuptrace.Mark("server_listen")
 		go func() {
 			errch <- srv.ListenAndServe()
 		}()

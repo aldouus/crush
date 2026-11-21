@@ -12,6 +12,7 @@ import (
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/ultraviolet/screen"
 	"github.com/taigrr/crush/internal/home"
+	"github.com/taigrr/crush/internal/startuptrace"
 	"github.com/taigrr/crush/internal/version"
 )
 
@@ -167,6 +168,7 @@ func (m *UI) editorCaret() *tea.Cursor {
 
 // View renders the UI model's view.
 func (m *UI) View() tea.View {
+	startuptrace.Mark("first_frame")
 	var v tea.View
 	v.AltScreen = true
 	if !m.isTransparent {

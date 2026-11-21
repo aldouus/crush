@@ -29,6 +29,7 @@ import (
 	"github.com/taigrr/crush/internal/registry"
 	"github.com/taigrr/crush/internal/skills"
 	"github.com/taigrr/crush/internal/sound"
+	"github.com/taigrr/crush/internal/startuptrace"
 	"github.com/taigrr/crush/internal/ui/util"
 	"github.com/taigrr/crush/internal/version"
 	"github.com/taigrr/crush/internal/voice"
@@ -496,6 +497,7 @@ func (b *Backend) CreateWorkspace(args proto.Workspace) (*Workspace, proto.Works
 		)))
 	}
 
+	startuptrace.Mark("ws_done")
 	return ws, workspaceToProtoForClient(ws, effectiveCwd), nil
 }
 
@@ -512,6 +514,7 @@ func (b *Backend) CreateWorkspace(args proto.Workspace) (*Workspace, proto.Works
 // launch directory, passed to app.New so tools and shell commands run
 // where the user actually is even inside a linked worktree.
 func (b *Backend) buildWorkspace(args proto.Workspace, key, effectiveCwd string) (*Workspace, error) {
+	startuptrace.Mark("ws_build")
 	cfg, err := config.Init(key, args.DataDir, args.Debug)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize config: %w", err)
@@ -529,6 +532,7 @@ func (b *Backend) buildWorkspace(args proto.Workspace, key, effectiveCwd string)
 		b.mu.Unlock()
 	}
 	cfg.Overrides().SkipPermissionRequests = skipPerms
+	startuptrace.Mark("ws_config")
 
 	if err := createDotCrushDir(cfg.Config().Options.DataDirectory); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
@@ -543,6 +547,7 @@ func (b *Backend) buildWorkspace(args proto.Workspace, key, effectiveCwd string)
 	// hosts multiple workspaces concurrently, so the manager is
 	// constructed WITHOUT WithGlobalMirror to prevent last-writer-wins
 	// cross-talk between workspaces.
+	startuptrace.Mark("ws_db")
 	discoveryCfg := skillsDiscoveryConfig(cfg)
 	allSkills, activeSkills, skillStates := skills.DiscoverFromConfig(discoveryCfg)
 	skillsMgr := skills.NewManager(
@@ -551,7 +556,9 @@ func (b *Backend) buildWorkspace(args proto.Workspace, key, effectiveCwd string)
 		skills.WithWorkingDir(discoveryCfg.WorkingDir),
 	)
 
+	startuptrace.Mark("ws_skills")
 	appWorkspace, err := app.New(b.ctx, conn, cfg, skillsMgr, effectiveCwd)
+	startuptrace.Mark("ws_app")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create app workspace: %w", err)
 	}
