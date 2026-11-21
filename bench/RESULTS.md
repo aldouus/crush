@@ -1333,3 +1333,53 @@ workspaces (-96..-99.8%, p=0.000); allocs 108..15026 -> 3.
   suggests capping background loading or a lighter row type for tails.
 - **Verdict**: KEPT as feature (no ready regression >3% with p<0.05).
 
+
+### Attempt 38 finalization (test/bench only, HEAD dde5d98c)
+
+Load avg during runs: 2.2-4.5 (1m). No production code changed.
+
+**Sidebar jank probe** (`internal/ui/model/sessionsidebar_jank_test.go`,
+`TestSidebarJankProbe`; default 10x200 smoke that asserts every session is
+listed; heavy run via `SIDEBAR_JANK=WSxN [SIDEBAR_JANK_MODE=inbox|grouped]`;
+also `BenchmarkSidebarFrame`/`BenchmarkSidebarApplyPage`). Per page
+(500 sessions) merge + one 60x50 frame with the sidebar open, GOMAXPROCS=4:
+
+| size | view | gap max | gap p99 | gap p50 | frame max |
+| --- | --- | --- | --- | --- | --- |
+| 10x2000 | grouped | 6.1ms | 6.1ms | 3.4ms | 2.5ms |
+| 10x2000 | inbox | 413ms | 413ms | 219ms | 403ms |
+| 20x5000 | grouped | 20.6ms | 19.4ms | 11.1ms | 9.0ms |
+| 20x5000 | inbox | 2.01s | 2.00s | 956ms | 1.95s |
+| 100x5000 / 300x5000 | both | did not finish in 20 min | | | |
+
+Finding: grouped view stays under one frame budget-ish (~20ms at 100k
+sessions) but the **inbox view re-renders O(total sessions) per frame**
+(frame cost ~linear: 20k -> 0.4s, 100k -> 2s), so with the navigator open in
+inbox mode a 100x5000 / 300x5000 background load janks the event loop for
+seconds per page, and steady-state inbox frames are equally slow once
+fully loaded (key press 1.9s at 20x5000). 100x5000 and 300x5000 are
+extrapolated at ~10s and ~30s per inbox frame. Not a regression of the
+background loader itself (the merge is a few ms); it exposes that inbox
+rendering is unbounded. Next fix candidate: virtualize/cache inbox rows.
+
+**Coverage (-race, all pass):**
+- '/' full-fetch before load done, loaded data after:
+  `TestBackgroundLoader_SearchFullFetchUntilLoaded` (new; replaces a
+  tautological assert in `TestBackgroundLoader_LoadsAllCurrentFirst`).
+- Live update / delete during load: `TestBackgroundSessions_LiveUpdateWins`,
+  `TestBackgroundSessions_DeleteDuringLoad`.
+- Cancellation: `TestBackgroundLoader_CancelledByReset`,
+  `TestBackgroundLoader_ResetsOnDisconnect`.
+- Cursor under concurrent inserts: `TestListWorkspaceSessionsPage_ConcurrentInserts`.
+- Legacy no-param overview: `TestListWorkspaceOverviews_LegacyUnchanged`.
+
+**Scale (bench/startup.py reuse mode, private socket, fixtures on
+/Volumes/Store1/tmp, deleted after; ready = 10 runs, first run is cold
+server and excluded from median; full load = 3 runs, STARTUP_FULL_LOAD):**
+
+| fixture | ready median +-sd | cold first run | fully loaded | TUI RSS | server RSS |
+| --- | --- | --- | --- | --- | --- |
+| 100x5000 | 1319 +-454ms | 11.3s | 16.9s +-1.2s | 338MB | 600MB |
+| 300x5000 | 1287 +-272ms | 20.8s | 46.3s +-0.1s | 784MB | 1250MB |
+
+Raw: bench/out/attempt38-final/.

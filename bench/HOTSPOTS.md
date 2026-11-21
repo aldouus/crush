@@ -424,3 +424,12 @@ Time to fully loaded: 10x200 0.56 s, 100x2000 6.3 s, 100x5000 15.4 s,
 TUI RSS after full load: 78 / 189 / 332 / 419 / 688 MB. Remaining hot
 spots: full sidebar re-projection (inbox sort over every row) when the
 navigator is visible, and TUI memory per held session at 1M+ sessions.
+
+### After attempt 38 (progressive background load, finalized)
+
+- Ready (warm server): ~1.3s at both 100x5000 and 300x5000; fully loaded
+  16.9s / 46.3s; TUI RSS 338MB / 784MB; server RSS 600MB / 1250MB.
+- Cold first attach still 11-21s (server peeks every DB).
+- New top hotspot: inbox-view sidebar render is O(total sessions) per frame
+  (~2s/frame at 100k sessions); grouped view ~10-20ms. See
+  `TestSidebarJankProbe` (`SIDEBAR_JANK=WSxN`).
