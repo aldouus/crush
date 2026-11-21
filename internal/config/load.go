@@ -1249,6 +1249,11 @@ func mayBeInGitRepo(dir string) bool {
 		return true
 	}
 	for {
+		// Abs output never has ".." components; this guard also marks the
+		// path as sanitized for static analysis. Falling back to git is safe.
+		if strings.Contains(abs, "..") {
+			return true
+		}
 		if _, err := os.Lstat(filepath.Join(abs, ".git")); err == nil || !os.IsNotExist(err) {
 			return true
 		}

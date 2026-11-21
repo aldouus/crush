@@ -467,6 +467,8 @@
   git repo the fork still happens (unchanged). Further `--version` wins
   need dropping chroma's eager init from the import graph (third-party).
 
+**Follow-up (CodeQL fix, PR #100):** CodeQL flagged `os.Lstat(filepath.Join(abs, ".git"))` as go/path-injection. Added a `strings.Contains(abs, "..")` guard inside the ancestor walk (CodeQL's recognized dot-dot sanitizer guard; `filepath.Abs` output never contains `..` components, and a hit merely falls back to running git, so behavior is preserved). `crush dirs` from a non-repo temp dir: 109.8 ms ± 11.0 ms (hyperfine, 10 runs), no regression in the fast path (one extra substring check per ancestor). Tests, vet, golangci-lint clean.
+
 ## Attempt 17: pool peer response buffers in cluster `call`
 
 - **Profile** (`BenchmarkClusterOverviewFetch`): 53% of bytes allocated
