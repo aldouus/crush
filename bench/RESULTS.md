@@ -11,6 +11,7 @@
 | 11 | Startup harness + fast server-ready poll | cold TUI first frame / ready | 596.2 / 674.9 ms | 467.5 / 548.3 ms | -21.6% / -18.8% | KEPT |
 | 12 | Cluster networking benchmark harness (baseline only) | cluster join/RPC/overview/reconnect/sync | see attempt 12 | n/a | n/a | BASELINE |
 | 14 | Startup DB-open path (investigation) | `BenchmarkConnectExisting` (200 sessions / 20k msgs) | 5.149 ms | n/a | n/a | REVERTED (nothing avoidable) |
+| 15 | Skip 25 ms readiness sleep on mesh start | `BenchmarkClusterMeshReconnect` / `ColdJoin` | 28.05 ms / 194.7 ms | 6.32 ms / 123.6 ms | -77.5% / -36.6% (p=0.000) | KEPT |
 
 ## Attempt 01: Lazy gh/gh-stack probes
 
