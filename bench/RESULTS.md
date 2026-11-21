@@ -555,3 +555,38 @@
 - **Confirmation rerun** (warm n=20, HEAD~1 vs HEAD, load 3.01/3.62):
   workspace_created 220.0 -> 197.6 ms, first_frame 233.9 -> 212.3 ms,
   ready 311.6 -> 294.3 ms.
+
+## Attempt 20: startup first frame -> ready (models dialog list re-measure)
+
+- **Breakdown** (temporary trace marks, warm, n=10, ms since exec):
+  first_frame 206.6, overview cmd starts 244.0, response 247.0,
+  `workspaceOverviewsMsg` handled 283.4. The RPC itself is ~3 ms (no
+  cluster wait; bench has no cluster bridge). The ~77 ms is the Bubble
+  Tea event loop: ~12 startup messages (ConnectionEvent, ColorProfile,
+  WindowSize, Env, MCP/LSP/skill events, RawMsg, bg color, version,
+  commands, history) each followed by a synchronous View of ~4 ms
+  (first full-size View ~17-21 ms). The overview msg queues behind them.
+  The bench runs unconfigured, so every frame draws the onboarding
+  models dialog.
+- **Hypothesis**: `Models.Draw` calls `list.SetSize` with innerWidth then
+  innerWidth-3 every frame; each width change drops the list render cache,
+  so `TotalHeight` re-renders every model item per frame. Memoizing the
+  measurement (keyed on item generation, width, styles) should cut View
+  cost and pull `ready` in.
+- **Change**: `internal/ui/dialog/models.go`, `models_list.go` (memo +
+  generation counter on `SetItems`).
+- **Method**: `bench/startup.py`, base/new interleaved twice; warm n=40,
+  cold n=30 each. Load 3.01 (start) / 2.44 (end).
+
+| Metric | Before | After | Delta |
+|---|---|---|---|
+| warm first_frame | 213.2 +-12.8 | 216.4 +-14.0 | +1.5% (MW p=0.36) |
+| warm ready | 294.5 +-17.9 | 299.0 +-19.2 | +1.5% (p=0.31) |
+| cold first_frame | 365.9 +-20.4 | 368.0 +-21.2 | +0.6% (p=0.95) |
+| cold ready | 449.5 +-25.0 | 449.4 +-24.6 | -0.0% (p=0.98) |
+
+- **Verdict**: REVERTED. Instrumented View was still ~4 ms/frame with
+  the memo; per-item width-keyed render caches already make re-measuring
+  cheap. Next step: pprof a single onboarding View (dialog/lipgloss
+  composition is the likely cost), or coalesce startup messages / render
+  less often, since ready is bounded by N_msgs x View cost.
