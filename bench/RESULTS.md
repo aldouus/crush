@@ -14,6 +14,7 @@
 | 15 | Skip 25 ms readiness sleep on mesh start | `BenchmarkClusterMeshReconnect` / `ColdJoin` | 28.05 ms / 194.7 ms | 6.32 ms / 123.6 ms | -77.5% / -36.6% (p=0.000) | KEPT |
 | 16 | Skip `git rev-parse` fork when no `.git` ancestor | hyperfine `crush dirs` (non-repo cwd) | 162.3 ms +-12.3 | 116.2 ms +-10.6 | -28.4% | KEPT |
 | 17 | Pool peer response buffers in cluster `call` | ClusterOverviewFetch time/op | 1.898 ms | 1.509 ms | -20.5% | KEPT |
+| 18 | Startup LSP/MCP init off critical path (investigation) | cold TUI first frame / ready | 387.6 / 469.0 ms (no MCP) | 390.1 / 472.3 ms (slow MCP) | ~ (+0.7%, within 1 sd) | REVERTED (already async) |
 
 ## Attempt 01: Lazy gh/gh-stack probes
 
@@ -487,3 +488,35 @@
 - **Load avg**: 2.00 (start) / 2.96 (end).
 - **Verdict**: KEPT. `go test -race ./internal/cluster ./internal/server`,
   vet, lint clean.
+
+## Attempt 18: startup LSP/MCP init (investigation)
+
+- **Hypothesis**: LSP/MCP client init runs serially or blocks first frame /
+  ready; moving it concurrent and off the critical path would cut both.
+- **Code reading**: already true. `app.New` calls `mcp.ArmInit()` then
+  `go mcp.Initialize(...)`, which starts every MCP server in its own
+  goroutine; only the coordinator's ready barrier (itself async, and only
+  before the first turn's tool list) calls `mcp.WaitForInit`. LSP servers
+  are on-demand (`Manager.Start` on file touch);
+  `go LSPManager.TrackConfigured()` only publishes "unstarted" states.
+- **Method**: `bench/startup.py` (temporarily patched to copy
+  `$BENCH_PROJECT_CONFIG` into the temp project as `crush.json`), 15 cold
+  runs each, same binary (HEAD b1de0504). Config: a stdio Python MCP server
+  that sleeps 1.5 s before answering `initialize`/`tools/list`, plus a
+  `gopls` LSP entry (gopls not installed, so it only reports state).
+  Isolated HOME/XDG/CRUSH_GLOBAL_* and private `-H unix://` socket.
+- **Results** (median ms from exec, +-stddev):
+
+  | Phase | No MCP/LSP | Slow MCP + LSP |
+  |-------|-----------:|---------------:|
+  | server_ready | 268.8 +-15.1 | 269.8 +-14.2 |
+  | srv.ws_done | 323.1 +-17.7 | 324.8 +-14.3 |
+  | first_frame | 387.6 +-21.3 | 390.1 +-14.7 |
+  | ready | 469.0 +-25.7 | 472.3 +-17.5 |
+
+  A 1.5 s MCP server adds ~2-3 ms (noise), so nothing on the
+  first-frame/ready path waits for MCP or LSP.
+- **Load avg**: 2.27 (start) / 2.40 (end).
+- **Verdict**: REVERTED (no code change; the harness patch was dropped).
+  Nothing to gain here; remaining startup cost is server spawn and
+  workspace/UI setup (see attempt 11).
