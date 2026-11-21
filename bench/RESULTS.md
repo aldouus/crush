@@ -15,6 +15,7 @@
 | 16 | Skip `git rev-parse` fork when no `.git` ancestor | hyperfine `crush dirs` (non-repo cwd) | 162.3 ms +-12.3 | 116.2 ms +-10.6 | -28.4% | KEPT |
 | 17 | Pool peer response buffers in cluster `call` | ClusterOverviewFetch time/op | 1.898 ms | 1.509 ms | -20.5% | KEPT |
 | 18 | Startup LSP/MCP init off critical path (investigation) | cold TUI first frame / ready | 387.6 / 469.0 ms (no MCP) | 390.1 / 472.3 ms (slow MCP) | ~ (+0.7%, within 1 sd) | REVERTED (already async) |
+| 19 | Fork `git branch` once per workspace open | warm TUI first frame / ready | 235.4 / 318.8 ms | 215.2 / 297.6 ms | -8.6% / -6.6% (p<1e-11) | KEPT |
 
 ## Attempt 01: Lazy gh/gh-stack probes
 
@@ -520,3 +521,34 @@
 - **Verdict**: REVERTED (no code change; the harness patch was dropped).
   Nothing to gain here; remaining startup cost is server spawn and
   workspace/UI setup (see attempt 11).
+
+## Attempt 19: warm workspace open breakdown + single git branch fork
+
+- **Breakdown** (temporary per-call duration instrumentation, warm server,
+  fresh project per run, n=10, median ms): HTTP handler 102 total =
+  decode 0.3, resolve key 0.3, config init 10.7, DB open + 20 migrations
+  38.7 (CPU-bound DDL/schema reparse in goose; ~1.5 ms if schema current),
+  skills 0.6, app.New 4.6, registry/swarm wiring 0.4, and
+  `workspaceToProtoForClient` **45.4**. The last one ran `git branch
+  --show-current` twice: once for `ws.Path` in `workspaceToProto`, then
+  again for the client launch cwd, discarding the first result.
+- **Hypothesis**: spawning git only for the directory actually reported
+  cuts ~22 ms off every workspace open (CreateWorkspace and adoption).
+- **Change**: `internal/backend/backend.go` (`workspaceToProtoAt`; the
+  per-client variant no longer computes the shared-path branch). Same
+  output. Also `bench/startup.py` now tolerates `PermissionError` from
+  `killpg` on an already-reaped pgid (harness crashed mid-run otherwise).
+  Instrumentation was dropped.
+- **Method**: `bench/startup.py <bin> 30 --warm`, base/new/base/new
+  interleaved (n=60 each), HEAD binary from a temp worktree.
+- **Load avg**: 3.23 (start) / 2.75 (end).
+
+| Metric (warm, n=60) | Before | After | Delta |
+|---|---|---|---|
+| workspace open (workspace_created - server_ready) | 102.8 +-8.5 | 80.4 +-7.1 | -21.8% (MW p=1e-17) |
+| first_frame | 235.4 +-12.8 | 215.2 +-15.6 | -8.6% (p=1e-13) |
+| ready | 318.8 +-18.1 | 297.6 +-18.3 | -6.6% (p=5e-12) |
+
+- **Verdict**: KEPT. Open delta separated by >2x stddev; `go test
+  ./internal/backend`, vet, lint clean. Next biggest: fresh-DB migrations
+  (~37 ms, only on first open of a project).

@@ -96,7 +96,7 @@ def run_once(binary, root, sock, trace, timeout=30.0):
         time.sleep(0.002)
     try:
         os.killpg(proc.pid, signal.SIGKILL)
-    except ProcessLookupError:
+    except (ProcessLookupError, PermissionError):
         pass
     proc.wait()
     if client:

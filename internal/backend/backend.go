@@ -1210,12 +1210,19 @@ func validateClientID(id string) (string, error) {
 }
 
 func workspaceToProto(ws *Workspace) proto.Workspace {
+	return workspaceToProtoAt(ws, ws.WorkingDir(), ws.Path)
+}
+
+// workspaceToProtoAt builds the wire form of ws reporting workingDir as
+// WorkingDir and the git branch checked out in branchDir. Callers pass
+// the directory they report so git is spawned only once.
+func workspaceToProtoAt(ws *Workspace, workingDir, branchDir string) proto.Workspace {
 	cfg := ws.Cfg.Config()
 	out := proto.Workspace{
 		ID:         ws.ID,
 		Path:       ws.Path,
-		WorkingDir: ws.WorkingDir(),
-		GitBranch:  getGitBranch(ws.Path),
+		WorkingDir: workingDir,
+		GitBranch:  getGitBranch(branchDir),
 		YOLO:       ws.Cfg.Overrides().SkipPermissionRequests,
 		DataDir:    cfg.Options.DataDirectory,
 		Debug:      cfg.Options.Debug,
@@ -1239,12 +1246,10 @@ func workspaceToProto(ws *Workspace) proto.Workspace {
 // symlink-resolved client cwd; an empty value falls back to the shared
 // workspace view.
 func workspaceToProtoForClient(ws *Workspace, launchCwd string) proto.Workspace {
-	out := workspaceToProto(ws)
-	if launchCwd != "" {
-		out.WorkingDir = launchCwd
-		out.GitBranch = getGitBranch(launchCwd)
+	if launchCwd == "" {
+		return workspaceToProto(ws)
 	}
-	return out
+	return workspaceToProtoAt(ws, launchCwd, launchCwd)
 }
 
 // skillsDiscoveryConfig adapts a *config.ConfigStore to the
