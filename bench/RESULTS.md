@@ -20,6 +20,7 @@
 | 24 | Read git HEAD instead of forking `git branch` on workspace open | warm workspace_created / first_frame / ready | 202.5 / 217.3 / 295.9 ms | 176.6 / 191.3 / 273.3 ms | -12.8% / -12.0% / -7.6% (p<1e-8) | KEPT |
 | 27 | Server-side cache of prompt git status + skills discovery | ready ms (reuse / reuse-teardown, small / large) | 288 / 356 / 448 / 698 | 195 / 236 / 217 / 520 | -32% / -34% / -52% / -26% | KEPT |
 | 28 | Process-wide cache of checkpoint gitignore patterns with stat revalidation | ready ms (reuse-teardown large / small) | 516.5 / 214.4 | 349.3 / 212.7 | -32.4% / -0.8% (noise) | KEPT |
+| 29 | Revalidate cached checkpoint gitignore in background; first snapshot waits | ready ms (reuse-teardown large / small) | 346.8 / 216.8 | 236.7 / 216.8 | -31.7% / 0% (noise) | KEPT |
 
 ## Attempt 01: Lazy gh/gh-stack probes
 
@@ -856,5 +857,33 @@
   Large reuse-teardown gap (167 ms) exceeds 2x the larger stddev (74 ms).
   Revalidation still costs ~116 ms of stats on the large tree; a watcher
   or moving it off the critical path would be the next step.
+- **Verdict**: KEPT. `go test -race`, vet, golangci-lint clean on
+  internal/checkpoint.
+
+## Attempt 29: background revalidation of the cached checkpoint gitignore
+
+- **Hypothesis**: after attempt 28 a cache hit still stats every walked dir
+  (~116 ms on the large fixture) synchronously inside `InitRepoAt`, which
+  the TUI waits on. No fs watcher exists in the codebase (no fsnotify), so
+  option (b): when a cache entry exists, run revalidation (and a full
+  re-walk if stale) in a goroutine and make the first snapshot block on it.
+- **Change**: `internal/checkpoint/ignorecache.go` (`loadIgnoreMatcher`,
+  `hasCachedIgnore` with the `..` guard), `internal/checkpoint/repo.go`
+  (`Repo.loadIgnorer`, resolved under `snapshotMu` at the start of
+  `CreateSnapshotCtx`, the only `buildTree` caller). No cache -> unchanged
+  synchronous path. New test: edit `.gitignore` between two `InitRepoAt`
+  calls, the first snapshot uses the new patterns (matcher + restored tree).
+- **Results** (bench/startup.py, 16 runs, old/new back to back, load
+  4.00 -> 2.16):
+
+  | fixture / mode | old ready | new ready | delta |
+  |---|---|---|---|
+  | large reuse-teardown | 346.8 +- 18.4 | 236.7 +- 19.5 | -31.7% |
+  | small reuse-teardown | 216.8 +- 23.7 | 216.8 +- 24.9 | noise |
+  | large reuse | 200.8 +- 17.7 | 203.7 +- 19.9 | noise |
+  | small reuse | 189.2 +- 11.2 | 188.7 +- 15.9 | noise |
+
+  Large reuse-teardown workspace_created 269.2 -> 156.2 ms. Gap (110 ms)
+  exceeds 2x the larger stddev (39 ms).
 - **Verdict**: KEPT. `go test -race`, vet, golangci-lint clean on
   internal/checkpoint.

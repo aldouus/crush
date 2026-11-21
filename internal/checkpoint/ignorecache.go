@@ -9,7 +9,49 @@ import (
 	"time"
 
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
+
+	"github.com/taigrr/crush/internal/startuptrace"
 )
+
+// loadIgnoreMatcher returns a function yielding the work tree's gitignore
+// matcher (nil when there are no patterns). When a cached entry exists its
+// revalidation runs in the background so repo setup does not wait on the
+// stat walk; the returned function blocks until it finishes.
+func loadIgnoreMatcher(workTree string) func() gitignore.Matcher {
+	resolve := func() gitignore.Matcher {
+		endIgnore := startuptrace.Span("srv.checkpoint.read_gitignore_patterns")
+		patterns, err := readIgnorePatterns(workTree)
+		endIgnore()
+		startuptrace.Count("srv.checkpoint.gitignore_patterns", len(patterns))
+		if err == nil && len(patterns) > 0 {
+			return gitignore.NewMatcher(patterns)
+		}
+		return nil
+	}
+	if !hasCachedIgnore(workTree) {
+		m := resolve()
+		return func() gitignore.Matcher { return m }
+	}
+	done := make(chan struct{})
+	var m gitignore.Matcher
+	go func() {
+		defer close(done)
+		m = resolve()
+	}()
+	return func() gitignore.Matcher {
+		<-done
+		return m
+	}
+}
+
+func hasCachedIgnore(workTree string) bool {
+	root, err := filepath.Abs(workTree)
+	if err != nil || strings.Contains(root, "..") {
+		return false
+	}
+	_, ok := ignoreCache.Load(root)
+	return ok
+}
 
 // ignoreStat records what a stat of a path looked like during a walk so a
 // later reuse can detect changes without re-reading directories.

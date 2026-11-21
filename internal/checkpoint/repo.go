@@ -27,8 +27,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/storage/filesystem"
-
-	"github.com/taigrr/crush/internal/startuptrace"
 )
 
 // Common errors.
@@ -63,6 +61,9 @@ type Repo struct {
 	workTree    string // Directory whose contents are snapshotted
 	config      *Config
 	ignorer     gitignore.Matcher
+	// loadIgnorer resolves ignorer before the first snapshot when the
+	// patterns are still being revalidated in the background.
+	loadIgnorer func() gitignore.Matcher
 
 	// snapshotMu serializes snapshot creation. Concurrent agent runs in the
 	// same workspace share a Repo, and blobCache is not safe for concurrent
@@ -177,23 +178,16 @@ func InitRepoAt(projectRoot, workTree string, cfg *Config) (*Repo, error) {
 		}
 	}
 
-	// Load .gitignore patterns from the work tree.
-	var ignorer gitignore.Matcher
-	endIgnore := startuptrace.Span("srv.checkpoint.read_gitignore_patterns")
-	patterns, err := readIgnorePatterns(workTree)
-	endIgnore()
-	startuptrace.Count("srv.checkpoint.gitignore_patterns", len(patterns))
-	if err == nil && len(patterns) > 0 {
-		ignorer = gitignore.NewMatcher(patterns)
-	}
-
+	// Load .gitignore patterns from the work tree. A cached result is
+	// revalidated in the background; the first snapshot waits for it.
+	loadIgnorer := loadIgnoreMatcher(workTree)
 	return &Repo{
 		repo:        repo,
 		gitDir:      gitDir,
 		projectRoot: projectRoot,
 		workTree:    workTree,
 		config:      cfg,
-		ignorer:     ignorer,
+		loadIgnorer: loadIgnorer,
 	}, nil
 }
 
@@ -211,6 +205,10 @@ func (r *Repo) CreateSnapshotCtx(ctx context.Context, description string) (strin
 
 	r.snapshotMu.Lock()
 	defer r.snapshotMu.Unlock()
+	if r.loadIgnorer != nil {
+		r.ignorer = r.loadIgnorer()
+		r.loadIgnorer = nil
+	}
 
 	// Build tree from the configured work tree.
 	treeHash, err := r.buildTree(ctx, r.workTree, "")

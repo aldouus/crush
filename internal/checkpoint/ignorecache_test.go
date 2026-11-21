@@ -89,3 +89,36 @@ func TestReadIgnorePatternsInvalidation(t *testing.T) {
 	require.NoError(t, os.WriteFile(p, []byte("secret\nmore\n"), 0o644))
 	requireMatchesFresh(t, dir)
 }
+
+func TestInitRepoFirstSnapshotWaitsForIgnoreRevalidation(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	write := func(body string) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(body), 0o644))
+	}
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git"), 0o755))
+	write("a/\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "a"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "bb"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a", "x.txt"), []byte("x"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "bb", "y.txt"), []byte("y"), 0o644))
+
+	_, err := InitRepoAt(dir, dir, DefaultConfig())
+	require.NoError(t, err)
+	require.True(t, hasCachedIgnore(dir))
+
+	write("bb/\n")
+	r, err := InitRepoAt(dir, dir, DefaultConfig())
+	require.NoError(t, err)
+	require.NotNil(t, r.loadIgnorer)
+	hash, err := r.CreateSnapshot("first")
+	require.NoError(t, err)
+	require.NotNil(t, r.ignorer)
+	require.True(t, r.ignorer.Match([]string{"bb"}, true))
+	require.False(t, r.ignorer.Match([]string{"a"}, true))
+
+	out := t.TempDir()
+	require.NoError(t, r.RestoreSnapshot(hash, out))
+	require.FileExists(t, filepath.Join(out, "a", "x.txt"))
+	require.NoFileExists(t, filepath.Join(out, "bb", "y.txt"))
+}
