@@ -42,12 +42,23 @@ type workspaceOverviewsMsg struct {
 	overviews []proto.WorkspaceOverview
 }
 
+// overviewSessionLimit bounds how many sessions per workspace the sidebar
+// fetches. The sidebar shows far fewer per workspace (its cap is an even
+// share of the body height); the rest collapse into the "…N more" row,
+// which opens the workspace's full session picker. A text search fetches
+// complete lists.
+const overviewSessionLimit = 50
+
 // loadWorkspaceOverviews fetches the cross-workspace session overviews off
-// the Update goroutine.
+// the Update goroutine. Lists are bounded unless the sidebar is searching.
 func (m *UI) loadWorkspaceOverviews() tea.Cmd {
+	limit := overviewSessionLimit
+	if m.leftSidebar != nil && m.leftSidebar.Searching() {
+		limit = 0
+	}
 	return func() tea.Msg {
 		startuptrace.Mark("overviews_req_start")
-		overviews, err := m.com.Workspace.ListWorkspaceOverviews(context.Background())
+		overviews, err := m.com.Workspace.ListWorkspaceOverviewsLimit(context.Background(), limit)
 		startuptrace.Mark("overviews_req_done")
 		if err != nil {
 			return util.InfoMsg{Type: util.InfoTypeError, Msg: err.Error()}
@@ -171,6 +182,10 @@ func (m *UI) handleLeftSidebarKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		// focused (this handler runs solely in that case), so it never
 		// collides with the editor's "/" add-file binding.
 		m.leftSidebar.EnterSearch()
+		if m.leftSidebar.Truncated() {
+			// Search must see every session, not just the bounded top.
+			return tea.Batch(m.scheduleSidebarPreview(), m.loadWorkspaceOverviews()), true
+		}
 		return m.scheduleSidebarPreview(), true
 	}
 	switch msg.String() {

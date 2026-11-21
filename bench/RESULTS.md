@@ -24,6 +24,7 @@
 | 30 | Prefetch workspace overviews at UI Init instead of inside the Cmd | ready ms (reuse large / reuse-teardown large) | 203.9 / 234.6 | 170.2 / 199.1 | -16.5% / -15.1% | KEPT |
 | 31 | Final validation: repeated TUI attach FS/DB caching (+ bounded caches) | ready ms, f32dc805 vs final (reuse / reuse-teardown, small / large) | 228.7 / 324.2 / 302.3 / 765.3 | 165.6 / 191.7 / 165.7 / 196.8 | -28% / -41% / -45% / -74% | KEPT |
 | 32 | Scale baseline: hundreds of workspaces x thousands of sessions (baseline only) | ready / overview vs N x M | 10x200: 197 ms ready, 0.3 MB | 300x5000: 4357 ms ready, 75-111 MB, 136-189/300 ws unavailable | n/a | BASELINE |
+| 33 | Bounded workspace overview (top-50 sessions per workspace + session_count) | TUI ready ms (reuse, 10x200 / 100x2000 / 100x5000 / 300x2000 / 300x5000) | 190 / 1196 / 2696 / 3527 / 4460 | 188 / 341 / 571 / 620 / 4004 | -1% (ns) / -72% / -79% / -82% / -10% | KEPT |
 
 ## Attempt 01: Lazy gh/gh-stack probes
 
@@ -1038,3 +1039,53 @@ persistent private server is the correct tool here.
 - **Details/curves/ranked fixes**: bench/HOTSPOTS.md "Scale: hundreds of
   workspaces x thousands of sessions".
 - **Verdict**: BASELINE (no code optimization).
+
+## Attempt 33: Bounded workspace overview (scale fix 1, partial 3)
+
+- **Hypothesis**: at N x M scale the TUI's "ready" is dominated by
+  encoding, transferring and decoding every session of every workspace
+  (67-81 MB). The sidebar shows at most an even height share per workspace
+  and collapses the rest into "…N more"; returning only the top K=50
+  sessions per workspace (already in display order: busy, unread, recent)
+  plus a total count should cut ready ~proportionally to payload.
+- **Change**: `GET /v1/workspace-overviews?limit=K` (also with `local=1`);
+  absent/0 keeps the full legacy response (rush mobile, older TUIs,
+  peers). New `proto.WorkspaceOverview.SessionCount` (`session_count`,
+  omitempty, set only when truncated). `Backend.ListWorkspaceOverviewsLimit`
+  / `ListClusterOverviewsLimit` (truncate after the existing sort/merge),
+  `Client.ListWorkspaceOverviewsLimit`, `Workspace.ListWorkspaceOverviewsLimit`.
+  TUI requests limit=50; while the "/" search is active it requests full
+  lists (entering search with truncated data triggers a full fetch). The
+  sidebar adds hidden sessions to the "…N more" row (which opens the
+  workspace's full picker, unchanged) and to the Total tally. Live updates
+  still refetch the overview; an updated session becomes most-recent so it
+  enters the top K. Swagger regenerated. Files: internal/proto/proto.go,
+  internal/backend/{overview,cluster}.go, internal/server/proto.go,
+  internal/client/proto.go, internal/workspace/{workspace,client_workspace}.go,
+  internal/ui/model/{sessionsidebar,sessionsidebar_wiring}.go, swagger,
+  tests (backend/overview_limit_test.go, server/overview_limit_test.go,
+  ui/model/sessionsidebar_bounded_test.go).
+- **Not done (follow-ups)**: the cluster peer fetch (`mesh.go`, `local=1`)
+  stays unbounded because `RemoteOverviews` also feeds device-session sync,
+  which needs complete lists; the bounded TUI request truncates the merged
+  result instead. No SQL LIMIT/index yet (peek cache still holds full
+  lists, server list_overviews unchanged), and no separate paginated
+  per-workspace endpoint: the overflow row's picker already lists the
+  workspace in full. 300x5000 stays dominated by the unbounded peek fan-out
+  (fix 2).
+- **Method**: same fixture per point (bench/scale/gen -clone, temp dirs on
+  /Volumes/Store1/tmp), HEAD and change binaries back to back,
+  `startup.py --mode reuse --probe 1`, 10 runs each; Mann-Whitney U.
+  Load avg 2.4-5.5 (one 5.5 spike during 100x5000).
+
+| N x M | HEAD ready (med) | new ready (med) | delta | p | HEAD overview req | new overview req |
+|---|---|---|---|---|---|---|
+| 10x200 | 190 ms | 188 ms | -1.2% | 0.26 | 22 ms | 16 ms |
+| 100x2000 | 1196 ms | 341 ms | -71.5% | 0.0002 | 1037 ms | 190 ms |
+| 100x5000 | 2696 ms | 571 ms | -78.8% | 0.0012 | 2521 ms | 403 ms |
+| 300x2000 | 3527 ms | 620 ms | -82.4% | 0.0065 | 3062 ms | 453 ms |
+| 300x5000 | 4460 ms | 4004 ms | -10.2% | 0.0025 | 4260 ms | 3362 ms |
+
+- **Verdict**: KEPT. Large points improve 10-82% (p<0.01), 10x200 no
+  regression. go test -race (backend, server, client, workspace, ui/model,
+  proto), go vet, golangci-lint clean.

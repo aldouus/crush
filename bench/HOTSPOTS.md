@@ -351,6 +351,15 @@ cost is dominated by item 1, not by its own workspace.
 6. `db.PeekSessions` / `session.Service.List`: no LIMIT, O(M).
 7. `backend.peekCache` (`peek_cache.go`): unbounded, holds every detached workspace's full listing (RSS 550-830 MB at 100-300 x 5000).
 
+### Status after attempt 33
+
+Fix 1 landed in bounded form: the TUI requests `limit=50` per workspace
+(`session_count` carries totals); ready at 100x2000 / 100x5000 / 300x2000
+dropped 1196 / 2696 / 3527 ms -> 341 / 571 / 620 ms. 300x5000 is now bound
+by fix 2 (peek fan-out, 3.1 s server list, ~200 ws unavailable). Fix 3
+(SQL LIMIT + index) and bounding the peer `local=1` fetch remain open; the
+peer fetch must stay full while device-session sync reads RemoteOverviews.
+
 ### Ranked fix list
 
 1. **Paginate/limit the overview**: per-workspace top-K sessions (busy, unread, favorites + newest K, e.g. 50) plus a total count; fetch more on expand/scroll. Cuts payload ~100x at M=5000 and removes the O(N*M) from ready. Highest impact.

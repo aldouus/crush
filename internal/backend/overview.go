@@ -29,12 +29,34 @@ import (
 // the top. Workspaces are ordered attached-first, then by registry
 // recency.
 func (b *Backend) ListWorkspaceOverviews(ctx context.Context) ([]proto.WorkspaceOverview, error) {
+	return b.ListWorkspaceOverviewsLimit(ctx, 0)
+}
+
+// ListWorkspaceOverviewsLimit is [Backend.ListWorkspaceOverviews] keeping
+// at most limit sessions per workspace (in display order) and reporting
+// the full count in SessionCount. A limit <= 0 lists everything.
+func (b *Backend) ListWorkspaceOverviewsLimit(ctx context.Context, limit int) ([]proto.WorkspaceOverview, error) {
 	all, err := b.listAllOverviews(ctx)
 	if err != nil {
 		return nil, err
 	}
 	owned, _ := b.splitByOwner(all)
-	return owned, nil
+	return limitOverviews(owned, limit), nil
+}
+
+// limitOverviews truncates each workspace's sessions to limit, recording
+// the original count. Sessions must already be in display order.
+func limitOverviews(ovs []proto.WorkspaceOverview, limit int) []proto.WorkspaceOverview {
+	if limit <= 0 {
+		return ovs
+	}
+	for i := range ovs {
+		if n := len(ovs[i].Sessions); n > limit {
+			ovs[i].SessionCount = max(ovs[i].SessionCount, n)
+			ovs[i].Sessions = slices.Clip(ovs[i].Sessions[:limit])
+		}
+	}
+	return ovs
 }
 
 // listAllOverviews lists every session, including read-only replicas of
