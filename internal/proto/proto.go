@@ -293,6 +293,10 @@ type WorkspaceOverview struct {
 	// holds only the first limit of them in display order. Zero when the
 	// list is complete.
 	SessionCount int `json:"session_count,omitempty"`
+	// NextCursor, on a single-workspace page (root query parameter), is
+	// passed back as after to fetch the following page. Empty on the
+	// last page and on full listings.
+	NextCursor string `json:"next_cursor,omitempty"`
 	// Unavailable marks a workspace (or, with an empty Root, a whole
 	// cluster node) whose sessions could not be read in time; Error says
 	// why. Sessions is then empty or a stale subset.

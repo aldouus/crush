@@ -2634,6 +2634,12 @@ definitions:
         type: string
       last_error:
         type: string
+      next_cursor:
+        description: |-
+          NextCursor, on a single-workspace page (root query parameter), is
+          passed back as after to fetch the following page. Empty on the
+          last page and on full listings.
+        type: string
       node_id:
         description: |-
           NodeID and NodeName identify the cluster node that owns the
@@ -3947,6 +3953,16 @@ paths:
       - description: 'Non-empty: only this node''s workspaces (node-to-node fetch)'
         in: query
         name: local
+        type: string
+      - description: 'Page one local workspace''s sessions: the response is that single
+          workspace, limit sessions after the after cursor, with next_cursor set while
+          more follow.'
+        in: query
+        name: root
+        type: string
+      - description: Paging cursor from a previous page's next_cursor (requires root)
+        in: query
+        name: after
         type: string
       produces:
       - application/json

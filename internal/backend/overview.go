@@ -225,15 +225,10 @@ func unreadSession(s session.Session) bool {
 
 // sortSessionOverviews orders sessions busy-first, then unread, then by
 // most-recently-updated, so live and unseen-complete work is surfaced.
+// Ties break by ID so the order is total, which paging cursors rely on.
 func sortSessionOverviews(s []proto.SessionOverview) {
-	sort.SliceStable(s, func(i, j int) bool {
+	sort.Slice(s, func(i, j int) bool {
 		a, b := s[i], s[j]
-		if a.IsBusy != b.IsBusy {
-			return a.IsBusy
-		}
-		if a.Unread != b.Unread {
-			return a.Unread
-		}
-		return a.UpdatedAt > b.UpdatedAt
+		return sessionLess(a.IsBusy, a.Unread, a.UpdatedAt, a.ID, b.IsBusy, b.Unread, b.UpdatedAt, b.ID)
 	})
 }

@@ -48,6 +48,33 @@ func (c *Client) ListWorkspaceOverviewsLimit(ctx context.Context, limit int) ([]
 	return decodeResponse[[]proto.WorkspaceOverview](rsp, err, "list workspace overviews")
 }
 
+// ListWorkspaceSessionsPage fetches one page of the workspace at root's
+// sessions after cursor (empty = first page). The returned overview's
+// NextCursor is empty on the last page. Servers predating paging ignore
+// root and return every workspace in full; the matching one is then
+// returned complete.
+func (c *Client) ListWorkspaceSessionsPage(ctx context.Context, root, cursor string, limit int) (proto.WorkspaceOverview, error) {
+	q := url.Values{"root": {root}}
+	if cursor != "" {
+		q.Set("after", cursor)
+	}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	//nolint:bodyclose // body closed by checkResponse/decodeResponse
+	rsp, err := c.get(ctx, "/workspace-overviews", q, nil)
+	ovs, err := decodeResponse[[]proto.WorkspaceOverview](rsp, err, "list workspace sessions page")
+	if err != nil {
+		return proto.WorkspaceOverview{}, err
+	}
+	for _, ov := range ovs {
+		if ov.Root == root && ov.NodeID == "" {
+			return ov, nil
+		}
+	}
+	return proto.WorkspaceOverview{}, fmt.Errorf("list workspace sessions page: workspace %q not in response", root)
+}
+
 // CreateWorkspace creates a new workspace on the server.
 func (c *Client) CreateWorkspace(ctx context.Context, ws proto.Workspace) (*proto.Workspace, error) {
 	ws.ClientID = c.clientID

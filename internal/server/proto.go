@@ -114,6 +114,8 @@ func (c *controllerV1) handleGetWorkspaces(w http.ResponseWriter, _ *http.Reques
 //	@Produce		json
 //	@Param			limit	query		int		false	"Max sessions per workspace (display order); session_count then carries the total. Omitted or 0 lists all."
 //	@Param			local	query		string	false	"Non-empty: only this node's workspaces (node-to-node fetch)"
+//	@Param			root	query		string	false	"Page one local workspace's sessions: the response is that single workspace, limit sessions after the after cursor, with next_cursor set while more follow."
+//	@Param			after	query		string	false	"Paging cursor from a previous page's next_cursor (requires root)"
 //	@Success		200		{array}		proto.WorkspaceOverview
 //	@Failure		400		{object}	proto.Error
 //	@Failure		500		{object}	proto.Error
@@ -128,6 +130,15 @@ func (c *controllerV1) handleGetWorkspaceOverviews(w http.ResponseWriter, r *htt
 			return
 		}
 		limit = n
+	}
+	if root := r.URL.Query().Get("root"); root != "" {
+		ov, err := c.backend.ListWorkspaceSessionsPage(r.Context(), root, r.URL.Query().Get("after"), limit)
+		if err != nil {
+			c.handleError(w, r, err)
+			return
+		}
+		jsonEncodeGzip(w, r, []proto.WorkspaceOverview{ov})
+		return
 	}
 	if r.URL.Query().Get("local") != "" {
 		// Node-to-node fetch: lists of a few thousand sessions run to

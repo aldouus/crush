@@ -170,6 +170,10 @@ type Workspace interface {
 	// most limit sessions per workspace, with SessionCount set to the
 	// total for truncated ones. A limit <= 0 lists everything.
 	ListWorkspaceOverviewsLimit(ctx context.Context, limit int) ([]proto.WorkspaceOverview, error)
+	// ListWorkspaceSessionsPage fetches up to limit of the sessions of the
+	// workspace at root (as listed in an overview) that follow cursor in
+	// display order. NextCursor is empty on the last page.
+	ListWorkspaceSessionsPage(ctx context.Context, root, cursor string, limit int) (proto.WorkspaceOverview, error)
 
 	// Messages
 	ListMessages(ctx context.Context, sessionID string) ([]message.Message, error)

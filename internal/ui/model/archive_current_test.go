@@ -196,3 +196,7 @@ func (w *archiveStubWorkspace) SessionBatch(ctx context.Context, op string, targ
 	}
 	return failed
 }
+
+func (w *archiveStubWorkspace) ListWorkspaceSessionsPage(_ context.Context, _, _ string, _ int) (proto.WorkspaceOverview, error) {
+	return proto.WorkspaceOverview{}, nil
+}

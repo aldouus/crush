@@ -1657,6 +1657,21 @@ func (w *ClientWorkspace) ListWorkspaceOverviewsLimit(ctx context.Context, limit
 	return w.qualifyOverviews(ovs), nil
 }
 
+// ListWorkspaceSessionsPage implements [Workspace]. root is an overview
+// root as returned by ListWorkspaceOverviewsLimit (possibly qualified).
+func (w *ClientWorkspace) ListWorkspaceSessionsPage(ctx context.Context, root, cursor string, limit int) (proto.WorkspaceOverview, error) {
+	_, c, plain := w.resolveRoot(root)
+	if c == nil {
+		return proto.WorkspaceOverview{}, fmt.Errorf("no client for workspace %q", root)
+	}
+	ov, err := c.ListWorkspaceSessionsPage(ctx, plain, cursor, limit)
+	if err != nil {
+		return proto.WorkspaceOverview{}, err
+	}
+	ov.Root = root
+	return ov, nil
+}
+
 // consumeEvents drives the workspace event loop. It is split out from
 // Subscribe so tests can drive it without a real *tea.Program.
 // ConfigChanged events trigger a workspace refresh; all other events
