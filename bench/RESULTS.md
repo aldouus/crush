@@ -18,6 +18,7 @@
 | 19 | Fork `git branch` once per workspace open | warm TUI first frame / ready | 235.4 / 318.8 ms | 215.2 / 297.6 ms | -8.6% / -6.6% (p<1e-11) | KEPT |
 | 21 | Long-poll join approval | `BenchmarkClusterJoinApprovalLatency` / `ColdJoin` | 1706 ms / 122.96 ms | 9.2 ms / 88.81 ms | -99.5% / -27.8% (p=0.000) | KEPT |
 | 24 | Read git HEAD instead of forking `git branch` on workspace open | warm workspace_created / first_frame / ready | 202.5 / 217.3 / 295.9 ms | 176.6 / 191.3 / 273.3 ms | -12.8% / -12.0% / -7.6% (p<1e-8) | KEPT |
+| 27 | Server-side cache of prompt git status + skills discovery | ready ms (reuse / reuse-teardown, small / large) | 288 / 356 / 448 / 698 | 195 / 236 / 217 / 520 | -32% / -34% / -52% / -26% | KEPT |
 
 ## Attempt 01: Lazy gh/gh-stack probes
 
@@ -780,3 +781,50 @@
   the redundant coordinator rebuilds on attach; second, cache the
   checkpoint gitignore matcher per project root across teardown.
 - **Verdict**: BASELINE (instrumentation only).
+
+## Attempt 27: server-side cache of prompt inputs (git status, skills)
+
+- **Hypothesis**: every TUI attach launches 7 (12 on rebuild) async
+  `prompt.Build` calls, each forking 3 `git` commands and re-walking the
+  skills dirs. Caching those inputs per working dir / skills path set,
+  with singleflight dedup of concurrent builds, removes almost all of
+  that server CPU and the contention it puts on the attach critical path.
+- **Change**: new `internal/agent/prompt/cache.go` (generic `inputCache`:
+  stat fingerprint + 5 s TTL + `singleflight`); `prompt.go` uses
+  `cachedGitStatus` and `cachedDiscoverSkills`. Git fingerprint: size +
+  mtime of `HEAD`, `index`, `packed-refs`, `refs/heads` and the ref HEAD
+  points to (follows `.git` files / `commondir` for linked worktrees).
+  Skills fingerprint: each skills root, its entries, and each entry's
+  `SKILL.md`. Fingerprint is re-taken after compute (git status rewrites
+  the index). The TTL covers unstaged work-tree edits and nested skill
+  edits that touch no fingerprinted file. Date and config-dependent
+  content (context files, disabled skills, model) are still computed per
+  build, so config changes need no extra invalidation. All new FS calls
+  on workspace-derived paths are guarded by `strings.Contains(p, "..")`.
+- **Not done**: skipping the second coordinator rebuild (`agent/update`).
+  `UpdateModels` also rebuilds tools from live MCP state, so a safe
+  "inputs unchanged" fingerprint is not cheap. With the cache, the
+  rebuild's prompt builds cost ~1 ms each, so the remaining win is small.
+- **Tests**: `cache_test.go`: cached == uncached git status; staging,
+  committing and switching branch each invalidate; TTL expiry recomputes;
+  adding a skill dir invalidates. `go test -race ./internal/agent/prompt
+  ./internal/agent`, `go vet`, golangci-lint: pass, 0 issues.
+- **Method**: `bench/startup.py <bin> 15 --mode {reuse,reuse-teardown}
+  --fixture {small,large}`, old (HEAD) and new back to back per cell.
+  Load avg 2.67 at start, 4.53 at end.
+- **Results** (ready ms, median +- stddev; server `prompt.build` /
+  `git_status` total ms per run):
+
+  | fixture / mode | old ready | new ready | delta | old srv build / git | new srv build / git |
+  |---|---|---|---|---|---|
+  | small reuse | 288 +- 29 | 195 +- 24 | -32.1% | 1019 / 977 | 19 / 0.9 |
+  | small reuse-teardown | 356 +- 39 | 236 +- 57 | -33.9% | 2519 / 2368 | 51 / 1.5 |
+  | large reuse | 448 +- 77 | 217 +- 48 | -51.6% | 2279 / 2205 | 25 / 0.9 |
+  | large reuse-teardown | 698 +- 93 | 520 +- 26 | -25.5% | 5361 / 4989 | 38 / 1.5 |
+
+  All median gaps are more than 2x the larger stddev. Caveat: harness
+  runs are under 5 s apart, so later runs also hit the cache across
+  launches. A relaunch more than 5 s later still gets singleflight dedup
+  (one git computation per attach instead of 7-12).
+- **Verdict**: KEPT.
+
