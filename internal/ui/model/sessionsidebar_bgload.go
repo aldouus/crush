@@ -12,25 +12,27 @@ import (
 )
 
 // Background loading paces itself so it never competes with startup or
-// input: it starts a moment after the first overview lands, keeps one
-// request in flight, pauses between pages, and re-projects the sidebar
-// rows at most every bgApplyInterval.
+// input: it starts a moment after the first overview lands, pages up to
+// bgConcurrency workspaces at once (the current one first), and
+// re-projects the sidebar rows at most every bgApplyInterval. Pages are
+// fetched off the event loop, so input is handled between them.
 const (
 	bgStartDelay    = 250 * time.Millisecond
-	bgPageDelay     = 10 * time.Millisecond
 	bgApplyInterval = 300 * time.Millisecond
-	bgPageSize      = 500
+	bgPageSize      = 2000
+	bgConcurrency   = 2
 )
 
 // backgroundLoader is the state of the progressive session loader. gen
 // invalidates in-flight pages after a reset.
 type backgroundLoader struct {
 	gen       uint64
+	ctx       context.Context
 	cancel    context.CancelFunc
 	started   bool
 	done      bool
 	queue     []string
-	cursor    string
+	inflight  int
 	lastApply time.Time
 	pending   bool
 	lastCost  time.Duration
@@ -77,39 +79,43 @@ func (m *UI) handleBgLoadStart(msg bgLoadStartMsg) tea.Cmd {
 	if msg.gen != m.bgLoad.gen {
 		return nil
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	m.bgLoad.cancel = cancel
+	m.bgLoad.ctx, m.bgLoad.cancel = context.WithCancel(context.Background())
 	m.bgLoad.queue = m.leftSidebar.BackgroundLoadRoots(m.com.Workspace.BaseDir())
 	m.bgLoad.lastApply = time.Now()
 	startuptrace.Mark("overviews_bg_start")
-	return m.nextBackgroundPage(ctx, 0)
+	return m.fillBackgroundLanes()
 }
 
-// nextBackgroundPage fetches the next page after delay, or finishes.
-func (m *UI) nextBackgroundPage(ctx context.Context, delay time.Duration) tea.Cmd {
-	if len(m.bgLoad.queue) == 0 {
+// fillBackgroundLanes starts paging queued roots until bgConcurrency are
+// in flight, or finishes once nothing is queued or in flight.
+func (m *UI) fillBackgroundLanes() tea.Cmd {
+	var cmds []tea.Cmd
+	for m.bgLoad.inflight < bgConcurrency && len(m.bgLoad.queue) > 0 {
+		root := m.bgLoad.queue[0]
+		m.bgLoad.queue = m.bgLoad.queue[1:]
+		cmds = append(cmds, m.fetchBackgroundPage(root, ""))
+	}
+	if m.bgLoad.inflight == 0 {
 		m.finishBackgroundLoad()
 		return nil
 	}
-	gen, root, cursor := m.bgLoad.gen, m.bgLoad.queue[0], m.bgLoad.cursor
-	ws := m.com.Workspace
-	fetch := func() tea.Msg {
+	return tea.Batch(cmds...)
+}
+
+func (m *UI) fetchBackgroundPage(root, cursor string) tea.Cmd {
+	m.bgLoad.inflight++
+	gen, ctx, ws := m.bgLoad.gen, m.bgLoad.ctx, m.com.Workspace
+	return func() tea.Msg {
 		ov, err := ws.ListWorkspaceSessionsPage(ctx, root, cursor, bgPageSize)
 		return bgPageMsg{gen: gen, root: root, ov: ov, err: err}
 	}
-	if delay <= 0 {
-		return fetch
-	}
-	return tea.Tick(delay, func(time.Time) tea.Msg { return fetch() })
 }
 
 func (m *UI) handleBgPage(msg bgPageMsg) tea.Cmd {
-	if msg.gen != m.bgLoad.gen || m.bgLoad.cancel == nil {
+	if msg.gen != m.bgLoad.gen || m.bgLoad.cancel == nil || m.bgLoad.done {
 		return nil
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	m.bgLoad.cancel()
-	m.bgLoad.cancel = cancel
+	m.bgLoad.inflight--
 	if msg.err != nil {
 		if m.com.Workspace.ConnectionState() != workspace.ConnectionStateConnected {
 			// Lost the server: start over once overviews flow again.
@@ -117,25 +123,17 @@ func (m *UI) handleBgPage(msg bgPageMsg) tea.Cmd {
 			return nil
 		}
 		slog.Debug("Failed to page workspace sessions", "root", msg.root, "error", msg.err)
-		m.popBackgroundRoot()
-		return m.nextBackgroundPage(ctx, bgPageDelay)
+		return m.fillBackgroundLanes()
 	}
 	m.leftSidebar.AddBackgroundSessions(msg.root, msg.ov.Sessions)
 	m.bgLoad.pending = true
-	if msg.ov.NextCursor == "" {
-		m.popBackgroundRoot()
-	} else {
-		m.bgLoad.cursor = msg.ov.NextCursor
-	}
 	if m.shouldApplyBackground() {
 		m.applyBackgroundSessions()
 	}
-	return m.nextBackgroundPage(ctx, bgPageDelay)
-}
-
-func (m *UI) popBackgroundRoot() {
-	m.bgLoad.queue = m.bgLoad.queue[1:]
-	m.bgLoad.cursor = ""
+	if msg.ov.NextCursor != "" {
+		return m.fetchBackgroundPage(msg.root, msg.ov.NextCursor)
+	}
+	return m.fillBackgroundLanes()
 }
 
 // shouldApplyBackground reports whether to re-project the sidebar rows now.

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/require"
 	"github.com/taigrr/crush/internal/proto"
 	"github.com/taigrr/crush/internal/ui/common"
@@ -161,24 +162,28 @@ func newBgTestUI(t *testing.T, ws *pagingStub) *UI {
 	return &UI{com: com, leftSidebar: s}
 }
 
-// drive runs the loader to completion, feeding each command's message back.
+// drive runs the loader to completion, feeding each command's messages
+// back in FIFO order (batched lanes are queued individually).
 func drive(m *UI, cmd func() any) {
-	for range 1000 {
-		var next func() any
-		switch msg := cmd().(type) {
+	queue := []func() any{cmd}
+	for i := 0; i < 1000 && len(queue) > 0; i++ {
+		var next tea.Cmd
+		switch msg := queue[0]().(type) {
+		case tea.BatchMsg:
+			for _, c := range msg {
+				if c != nil {
+					queue = append(queue, func() any { return c() })
+				}
+			}
 		case bgLoadStartMsg:
-			if c := m.handleBgLoadStart(msg); c != nil {
-				next = func() any { return c() }
-			}
+			next = m.handleBgLoadStart(msg)
 		case bgPageMsg:
-			if c := m.handleBgPage(msg); c != nil {
-				next = func() any { return c() }
-			}
+			next = m.handleBgPage(msg)
 		}
-		if next == nil {
-			return
+		queue = queue[1:]
+		if next != nil {
+			queue = append(queue, func() any { return next() })
 		}
-		cmd = next
 	}
 }
 
@@ -187,7 +192,7 @@ func drive(m *UI, cmd func() any) {
 func TestBackgroundLoader_LoadsAllCurrentFirst(t *testing.T) {
 	t.Parallel()
 	ws := &pagingStub{archiveStubWorkspace: &archiveStubWorkspace{}, state: workspace.ConnectionStateConnected, sessions: map[string][]proto.SessionOverview{
-		"/x":   bgSessions("x", 1200),
+		"/x":   bgSessions("x", 2*bgPageSize+200),
 		"/cur": bgSessions("c", 700),
 		"/bad": bgSessions("b", 100),
 	}}
@@ -207,7 +212,8 @@ func TestBackgroundLoader_LoadsAllCurrentFirst(t *testing.T) {
 	require.Nil(t, m.maybeStartBackgroundLoad(), "starts once")
 	drive(m, func() any { return bgLoadStartMsg{gen: m.bgLoad.gen} })
 
-	require.Equal(t, []string{"/cur@", "/cur@500", "/x@", "/x@500", "/x@1000", "/bad@"}, ws.calls)
+	p1, p2 := fmt.Sprint(bgPageSize), fmt.Sprint(2*bgPageSize)
+	require.Equal(t, []string{"/cur@", "/x@", "/bad@", "/x@" + p1, "/x@" + p2}, ws.calls)
 	require.True(t, m.bgLoad.complete())
 	for _, ov := range m.leftSidebar.overviews {
 		switch ov.Root {
@@ -282,13 +288,17 @@ func TestBackgroundLoader_CancelledByReset(t *testing.T) {
 	m.maybeStartBackgroundLoad()
 	cmd := m.handleBgLoadStart(bgLoadStartMsg{gen: m.bgLoad.gen})
 	require.NotNil(t, cmd)
-	page := cmd().(bgPageMsg)
-	cancel := m.bgLoad.cancel
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		msg = batch[0]()
+	}
+	page := msg.(bgPageMsg)
+	ctx := m.bgLoad.ctx
 	m.resetBackgroundLoad()
+	require.Error(t, ctx.Err())
 	require.Nil(t, m.handleBgPage(page))
 	require.Len(t, m.leftSidebar.overviews[0].Sessions, 50)
 	require.False(t, m.bgLoad.started)
-	_ = cancel
 }
 
 // TestBackgroundLoader_ResetsOnDisconnect verifies a failed page while the

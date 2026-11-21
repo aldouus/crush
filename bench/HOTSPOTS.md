@@ -439,3 +439,9 @@ Attempt 39: sidebar inbox view rendered every projected row per frame
 inbox frame 7ms / key 6.6ms at 100k (grouped 6.4ms). Next at 500k: per-page
 `ApplyBackgroundSessions` -> `rebuildRows` full filter+sort (~0.2-0.5s/page
 at 100x5000) and O(n) `SessionCounts`.
+
+Attempt 40: background loader was round-trip bound (500/page, 1 in
+flight, 10ms gap). Now 2000/page, 2 workspaces in flight, no gap: fully
+loaded 100x5000 15.5s -> 2.5s, 300x5000 45.5s -> 6.6s (server-bound;
+concurrency 4 no faster). Ready unchanged. Remaining: inbox apply
+(`rebuildRows`) ~0.5s per throttled apply at 100x5000.

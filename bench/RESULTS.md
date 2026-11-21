@@ -31,6 +31,7 @@
 | 37 | Active/busy session always in bounded overview, WAL-safe peek stamp, LRU-bounded peek cache | correctness (sidebar), 300x5000 ready ms | 1530 +-262 | 631 +-33 (not attributed) | correctness fix | KEPT (correctness) |
 | 38 | Progressive background loading of workspace sessions (paged per-workspace overview + TUI loader) | TUI ready ms (reuse, 10x200 / 100x2000 / 100x5000 / 300x2000 / 300x5000) | 206 / 287 / 381 / 434 / 2014 | 189 / 292 / 393 / 408 / 1728 | no regression (all p>0.05 except 10x200 -7.8% p=0.04, 300x5000 -14% p=0.01, not claimed); full load 0.56 / 6.3 / 15.4 / 17.7 / 51.2 s | KEPT (feature) |
 | 39 | Inbox-view regression: render only the visible sidebar window (both views) | BenchmarkSidebarScale inbox frame / key (20k / 100k sessions) | 366 / 381 ms; 1807 / 1820 ms | 2.24 / 2.05 ms; 6.97 / 6.58 ms | -99.4% / -99.6% (p=0.000); grouped also -46% / -62% | KEPT |
+| 40 | Background loader: no fixed page gap, 2000/page, 2 workspaces in flight | fully loaded s (10x200 / 100x5000 / 300x5000) | 0.58 / 15.5 / 45.5 | 0.52 / 2.47 / 6.59 | -10% / -84% / -86% (MW p=0.05, n=3 min); ready no regression | KEPT |
 
 ## Attempt 01: Lazy gh/gh-stack probes
 
@@ -1432,3 +1433,54 @@ session) in `ApplyBackgroundSessions`, plus the O(n) `SessionCounts`
 summary; candidate for a later incremental inbox projection. 300x5000 not
 run. go test -race ./internal/ui/model, go vet, GOOS=windows go vet ./...,
 golangci-lint: pass. KEPT.
+
+## Attempt 40: faster background loader
+
+Hypothesis: after attempt 39 the loader is latency-bound, not render-bound:
+one 500-session request in flight plus a fixed 10 ms gap means ~3000
+serial round trips at 300x5000. Bigger pages, no fixed gap (pages are
+fetched in tea.Cmd goroutines, so the event loop handles input between
+them anyway) and a few workspaces in flight should cut time-to-fully-loaded
+without touching ready.
+
+Change: `internal/ui/model/sessionsidebar_bgload.go`: `bgPageDelay`
+removed, `bgPageSize` 500 -> 2000, new `bgConcurrency` = 2 lanes (queue
+order kept, current workspace still started first), one context per load
+(cancelled on reset/finish), in-flight counter drives completion.
+Re-projection throttling (`bgApplyInterval` / 10x last cost), hidden-sidebar
+deferral and the merge/live-update/delete rules are unchanged. Tests:
+`sessionsidebar_bgload_test.go` drive() now fans out `tea.BatchMsg`; call
+order and reset-cancels-context asserted.
+
+Measurement: `bench/startup.py --mode reuse --probe 1`, private socket,
+fixtures on /Volumes/Store1/tmp, HEAD (747d0866) vs change back to back;
+ready 10 runs, fully loaded 3 runs (`STARTUP_FULL_LOAD=120`). Load avg
+2.1-4.2. Raw: `bench/out/attempt40/`.
+
+| fixture | metric | HEAD | change (c=4) | delta | MW p |
+| --- | --- | --- | --- | --- | --- |
+| 10x200 | ready | 210 +-38ms | 206 +-10ms | -1.8% | 0.45 |
+| 10x200 | fully loaded | 581 +-18ms | 521 +-16ms | -10.5% | 0.05 |
+| 100x5000 | ready | 520ms | 466 +-27ms | -10.4% | 0.04 |
+| 100x5000 | fully loaded | 15.55 +-0.06s | 2.47 +-0.01s | -84.1% | 0.05 |
+| 100x5000 | TUI / srv RSS | 340 / 791MB | 339 / 695MB | ~0 / -12% | 0.51 / 0.13 |
+| 300x5000 | ready | 1801ms | 806 +-53ms | -55% (HEAD ran first, cold outlier; not claimed) | 0.000 |
+| 300x5000 | fully loaded | 45.5 +-0.5s | 6.59 +-0.59s | -85.5% | 0.05 |
+| 300x5000 | TUI / srv RSS | 854 / 1667MB | 833 / 1753MB | -2% / +5% | 0.28 / 0.83 |
+
+Tuning at 300x5000 (page 2000, 3 runs): concurrency 2 fully loaded
+6.56 / 6.79 / 6.84s, concurrency 4 6.98 / 6.48 / 6.47s: equal (server-bound),
+so 2 was chosen (less server contention). p=0.05 is the minimum attainable
+with n=3 vs 3 (all runs separated).
+
+Jank (`CRUSH_JANK_PROBE=1 SIDEBAR_JANK=100x5000`, per-page apply + frame):
+page 500 inbox gap max 515ms / p99 495ms, grouped 93 / 82ms; page 2000
+inbox 511 / 496ms, grouped 95 / 82ms; frame p99 ~30ms both. The per-apply
+cost is unchanged (it is `rebuildRows`, independent of page size) and the
+real loader still applies at most every max(300ms, 10x last cost), so
+fewer, larger pages do not add event-loop stalls; the gap is the attempt 39
+known hotspot (inbox `rebuildRows`), not this change. 300x5000 probe did
+not finish within 600s (pre-existing, same per-apply cost). go test -race
+-count=3 ./internal/ui/model, go vet, GOOS=windows go vet ./...,
+golangci-lint: pass. KEPT.
+
