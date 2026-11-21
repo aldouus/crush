@@ -11,7 +11,7 @@ import (
 	"github.com/taigrr/crush/internal/db"
 )
 
-func open(t *testing.T) *sql.DB {
+func open(t testing.TB) *sql.DB {
 	t.Helper()
 	dir := t.TempDir()
 	conn, err := db.Connect(t.Context(), dir)
@@ -20,24 +20,24 @@ func open(t *testing.T) *sql.DB {
 	return conn
 }
 
-func exec(t *testing.T, conn *sql.DB, q string, args ...any) {
+func exec(t testing.TB, conn *sql.DB, q string, args ...any) {
 	t.Helper()
 	_, err := conn.Exec(q, args...)
 	require.NoError(t, err)
 }
 
-func addSession(t *testing.T, conn *sql.DB, id, title string) {
+func addSession(t testing.TB, conn *sql.DB, id, title string) {
 	now := time.Now().UnixMilli()
 	exec(t, conn, `INSERT INTO sessions (id, title, message_count, prompt_tokens, completion_tokens, cost, updated_at, created_at) VALUES (?,?,0,0,0,0,?,?)`, id, title, now, now)
 }
 
-func addMessage(t *testing.T, conn *sql.DB, id, sid string) {
+func addMessage(t testing.TB, conn *sql.DB, id, sid string) {
 	now := time.Now().UnixMilli()
 	exec(t, conn, `INSERT INTO messages (id, session_id, role, parts, created_at, updated_at) VALUES (?,?,'user','[]',?,?)`, id, sid, now, now)
 }
 
 // roundTrip simulates the wire: JSON encode then decode.
-func roundTrip(t *testing.T, b Batch) Batch {
+func roundTrip(t testing.TB, b Batch) Batch {
 	t.Helper()
 	data, err := json.Marshal(b)
 	require.NoError(t, err)

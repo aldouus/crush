@@ -9,6 +9,7 @@
 | 08 | Single-pass parts decode (dup of 09) | `BenchmarkMessageList` | 17.50 / 67.73 ms | 13.82 / 53.89 ms | -21% / -20% | KEPT (landed as 09) |
 | 10 | Markdown renderer / xchroma style memo | `BenchmarkMarkdownRender` | 39.82 ms | 38.55 ms | ~ (p=0.39) | REVERTED |
 | 11 | Startup harness + fast server-ready poll | cold TUI first frame / ready | 596.2 / 674.9 ms | 467.5 / 548.3 ms | -21.6% / -18.8% | KEPT |
+| 12 | Cluster networking benchmark harness (baseline only) | cluster join/RPC/overview/reconnect/sync | see attempt 12 | n/a | n/a | BASELINE |
 
 ## Attempt 01: Lazy gh/gh-stack probes
 
@@ -315,3 +316,35 @@
   and spawned server), ~145 ms CreateWorkspace round trip on a warm server
   (~45 ms between `ws_done` and the client seeing the response), and
   ~80 ms first_frame -> overviews_loaded.
+
+## Attempt 12: cluster networking benchmark harness (baseline, no optimization)
+
+- **Goal**: measurable cluster networking paths. All nodes are in-process
+  on 127.0.0.1 random ports with `b.TempDir()` data dirs; the live cluster,
+  daemon and `~/.local/share/crush` are never touched. Every node and mesh
+  is closed in cleanup.
+- **Change**: `internal/cluster/cluster_bench_test.go`,
+  `internal/replica/replica_bench_test.go` (new); test helpers
+  `newTestNode`/`freeAddr`/`pairedTrio` and replica helpers now take
+  `testing.TB`; `bench/run.sh` + `bench/README.md` include them.
+- **Relay**: nodes route over a full NATS mesh with `NoAdvertise`; there is
+  no in-process relay mode (`EndpointRelay` is reserved in `state.go`), so
+  no relay benchmark.
+- **Note**: `Mesh.NumRoutes` counts pooled route connections (several per
+  peer), so the harness counts distinct peers via `Routez` instead.
+- **Load avg**: 1.23 (start) / 2.31 (end). GOMAXPROCS=4, count=10,
+  raw in `bench/out/cluster-baseline/`.
+
+| Benchmark | median | p50 / p99 | B/op | allocs/op |
+|---|---|---|---|---|
+| ClusterColdJoin (pair 3 + mesh) | 194.4 ms +-2% | mesh part 84 ms | 4.55 MiB | 36.7k |
+| ClusterMeshRequest (NATS req/rep) | 138.2 us | 138.5 / 206.5 us | 2.4 KiB | 39 |
+| ClusterCallAPI (mTLS HTTP) | 437.5 us +-19% | 447.5 / 741 us | 15.9 KiB | 178 |
+| ClusterOverviewFetch (2 x 200 sessions) | 1.887 ms | 1.81 / 2.83 ms | 472 KiB | 1.29k |
+| ClusterMeshReconnect (peer restart) | 28.0 ms | 28.4 / 28.8 ms | 1.96 MiB | 15.5k |
+| ClusterMeshThroughput (1 KiB msgs) | 175 MiB/s | - | 527 KiB/256 msgs | 2.2k |
+| ReplicaFullSync (200 sess x 10 msgs) | 1.325 s +-6% | 842 KiB wire | 31.2 MiB | 387k |
+| ReplicaServeDelta (no changes) | 477.7 us | - | 24.3 KiB | 709 |
+
+- **Verdict**: BASELINE (harness only). Hotspots in `bench/HOTSPOTS.md`
+  ("Cluster").

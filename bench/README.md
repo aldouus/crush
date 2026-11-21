@@ -48,6 +48,18 @@ Environment overrides: `BENCH_COUNT`, `BENCH_TIME`, `HYPERFINE`,
 | `BenchmarkWireFullMessage`     | `internal/server/wire_bench_test.go`          | Server wire encoding of full messages                         |
 | `BenchmarkWireDeltas`          | `internal/server/wire_bench_test.go`          | Server wire encoding of streaming deltas                      |
 | `BenchmarkBrokerPublish`       | `internal/pubsub/broker_bench_test.go`        | pubsub fan-out to 4 subscribers                               |
+| `BenchmarkClusterColdJoin`     | `internal/cluster/cluster_bench_test.go`      | Pair 3 fresh nodes + mesh start until fully routed            |
+| `BenchmarkClusterMeshRequest`  | `internal/cluster/cluster_bench_test.go`      | NATS request/reply node 0 -> node 1 (p50/p99)                 |
+| `BenchmarkClusterCallAPI`      | `internal/cluster/cluster_bench_test.go`      | mTLS HTTP API call node 0 -> node 1 (p50/p99)                 |
+| `BenchmarkClusterOverviewFetch`| `internal/cluster/cluster_bench_test.go`      | Parallel overview fetch, 2 members x 200 sessions             |
+| `BenchmarkClusterMeshReconnect`| `internal/cluster/cluster_bench_test.go`      | Peer mesh restart until fully routed again                    |
+| `BenchmarkClusterMeshThroughput`| `internal/cluster/cluster_bench_test.go`     | 1 KiB publishes node 0 -> node 2, MB/s                        |
+| `BenchmarkReplicaFullSync`     | `internal/replica/replica_bench_test.go`      | Serve + JSON + Apply of 200 sessions x 10 messages            |
+| `BenchmarkReplicaServeDelta`   | `internal/replica/replica_bench_test.go`      | Steady-state incremental Serve with no changes                |
+
+All cluster benchmarks run in-process on 127.0.0.1 random ports with temp
+data dirs; relays are not implemented in-process, so there is no relay
+benchmark.
 
 Synthetic sessions come from `internal/benchdata`, which deterministically
 generates user prompts, markdown replies with code blocks/tables, bash tool

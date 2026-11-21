@@ -82,3 +82,33 @@ and profiles live in `bench/out/baseline/` (`*.cpu.pprof`, `*.mem.pprof`,
 - `BenchmarkBrokerPublish`: 0.79 us, 0 allocs.
 - `BenchmarkLoadFromConfigPaths`: 206 us, 396 allocs.
 - `BenchmarkWireDeltas`: 2.7 ms, 715 KiB.
+
+## Cluster (attempt 12 baseline)
+
+Profiles in `bench/out/cluster-baseline/*.top.txt`.
+
+1. **Replica full sync is by far the slowest path**: 1.33 s for 200
+   sessions x 10 messages (2.2k rows, 842 KiB). `Apply` dominates (Serve is
+   negligible): one unprepared `upsert` per row inside the tx plus a
+   per-row `owner()` `SELECT` for every message, with sqlite prepare ~12%
+   of CPU and >50% of samples in goroutine wakeups (`pthread_cond_signal`)
+   from per-statement context handling. Ideas: cache owner lookups per
+   session within a batch, prepare one statement per table/column set,
+   batch multi-row upserts.
+2. **Cold join**: 194 ms for 3 nodes, of which mesh routing is 84 ms (TLS
+   route handshakes ~27% of CPU; NATS pools several route connections per
+   peer, each with its own handshake). The other ~110 ms is pairing; real
+   `Join` polls approval every **2 s** by default (`ops.go`
+   `PollInterval`), so an interactive join waits up to 2 s after approval.
+3. **Reconnect**: 28 ms when the restarted peer dials out. Survivors rely
+   on NATS route reconnect (`ConnectRetries: -1`, default 1 s reconnect
+   delay), so if the restarted peer cannot dial back, recovery is bounded
+   by that interval instead.
+4. **CallAPI** (0.44 ms) is ~3x a NATS round trip (0.14 ms): HTTP + JSON +
+   mTLS per call on a keep-alive transport; `CallAPI` builds a new
+   `http.Client` per call (cheap) and resolves the endpoint each time.
+5. **Overview fetch**: 1.9 ms for 2 x 200 sessions, mostly JSON decode
+   (472 KiB/op). The server's remote view also does a separate
+   sync-position call before each overview fetch (serial, two round
+   trips per node).
+6. Not hot: NATS throughput 175 MiB/s; ServeDelta 0.48 ms.

@@ -27,8 +27,10 @@ BENCH_PKGS=(
 	./internal/config
 	./internal/server
 	./internal/pubsub
+	./internal/cluster
+	./internal/replica
 )
-BENCH_RE='^(BenchmarkUIView|BenchmarkUIDraw|BenchmarkUIScrollFrame|BenchmarkUISessionLoad|BenchmarkMarkdownRender|BenchmarkDiffRender|BenchmarkMessageList|BenchmarkLoadFromConfigPaths|BenchmarkWireFullMessage|BenchmarkWireDeltas|BenchmarkBrokerPublish)$'
+BENCH_RE='^(BenchmarkUIView|BenchmarkUIDraw|BenchmarkUIScrollFrame|BenchmarkUISessionLoad|BenchmarkMarkdownRender|BenchmarkDiffRender|BenchmarkMessageList|BenchmarkLoadFromConfigPaths|BenchmarkWireFullMessage|BenchmarkWireDeltas|BenchmarkBrokerPublish|BenchmarkCluster.*|BenchmarkReplica.*)$'
 
 mkdir -p "$OUT"
 TMP="$(mktemp -d)"
