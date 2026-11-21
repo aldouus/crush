@@ -23,6 +23,11 @@ func readGitBranch(dir string) (branch string, ok bool) {
 	}
 	cur := abs
 	for {
+		// Abs output never has ".." components; this guard also marks the
+		// path as sanitized for static analysis. Falling back to git is safe.
+		if strings.Contains(cur, "..") {
+			return "", false
+		}
 		if isGitDir(cur) {
 			return "", false
 		}
@@ -42,13 +47,20 @@ func readGitBranch(dir string) (branch string, ok bool) {
 }
 
 func isGitDir(dir string) bool {
-	if _, err := os.Lstat(filepath.Join(dir, "HEAD")); err != nil {
+	head := filepath.Join(dir, "HEAD")
+	if strings.Contains(head, "..") {
+		return true
+	}
+	if _, err := os.Lstat(head); err != nil {
 		return false
 	}
 	return true
 }
 
 func branchFromDotGit(top string, fi os.FileInfo) (string, bool) {
+	if strings.Contains(top, "..") {
+		return "", false
+	}
 	if !ownedByMe(top) {
 		return "", false
 	}
@@ -57,7 +69,11 @@ func branchFromDotGit(top string, fi os.FileInfo) (string, bool) {
 	case fi.IsDir():
 		gitDir = filepath.Join(top, ".git")
 	case fi.Mode().IsRegular():
-		data, err := os.ReadFile(filepath.Join(top, ".git"))
+		dotGit := filepath.Join(top, ".git")
+		if strings.Contains(dotGit, "..") {
+			return "", false
+		}
+		data, err := os.ReadFile(dotGit)
 		if err != nil {
 			return "", false
 		}
@@ -75,10 +91,13 @@ func branchFromDotGit(top string, fi os.FileInfo) (string, bool) {
 	default:
 		return "", false
 	}
-	if !ownedByMe(gitDir) {
+	if strings.Contains(gitDir, "..") || !ownedByMe(gitDir) {
 		return "", false
 	}
 	headPath := filepath.Join(gitDir, "HEAD")
+	if strings.Contains(headPath, "..") {
+		return "", false
+	}
 	hfi, err := os.Lstat(headPath)
 	if err != nil || !hfi.Mode().IsRegular() {
 		return "", false

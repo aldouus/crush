@@ -704,6 +704,7 @@
   lint clean.
 - **Verdict**: KEPT. Next biggest: fresh-DB migrations (~35 ms, first
   open of a project only).
+- **Follow-up**: added `strings.Contains(p, "..")` guards (fallback to git) before every file API in gitbranch*.go, incl. `gitdir:` paths, to clear CodeQL go/path-injection alerts on PR #100.
 
 ## Attempt 25: survivor-side route re-solicit for one-sided reconnects
 
