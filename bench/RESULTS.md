@@ -30,6 +30,7 @@
 | 36 | Lazy owner lookup in replica delta Serve (scale fix 6, partial) | ServeDelta no-change poll (200 / 2000 / 5000 sessions) | 483 us / 2.92 ms / 6.87 ms | 175 us / 179 us / 178 us | -64% / -94% / -97% (p=0.000) | KEPT |
 | 37 | Active/busy session always in bounded overview, WAL-safe peek stamp, LRU-bounded peek cache | correctness (sidebar), 300x5000 ready ms | 1530 +-262 | 631 +-33 (not attributed) | correctness fix | KEPT (correctness) |
 | 38 | Progressive background loading of workspace sessions (paged per-workspace overview + TUI loader) | TUI ready ms (reuse, 10x200 / 100x2000 / 100x5000 / 300x2000 / 300x5000) | 206 / 287 / 381 / 434 / 2014 | 189 / 292 / 393 / 408 / 1728 | no regression (all p>0.05 except 10x200 -7.8% p=0.04, 300x5000 -14% p=0.01, not claimed); full load 0.56 / 6.3 / 15.4 / 17.7 / 51.2 s | KEPT (feature) |
+| 39 | Inbox-view regression: render only the visible sidebar window (both views) | BenchmarkSidebarScale inbox frame / key (20k / 100k sessions) | 366 / 381 ms; 1807 / 1820 ms | 2.24 / 2.05 ms; 6.97 / 6.58 ms | -99.4% / -99.6% (p=0.000); grouped also -46% / -62% | KEPT |
 
 ## Attempt 01: Lazy gh/gh-stack probes
 
@@ -1383,3 +1384,51 @@ server and excluded from median; full load = 3 runs, STARTUP_FULL_LOAD):**
 | 300x5000 | 1287 +-272ms | 20.8s | 46.3s +-0.1s | 784MB | 1250MB |
 
 Raw: bench/out/attempt38-final/.
+
+## Attempt 39: fix inbox-view regression (windowed sidebar render)
+
+Hypothesis: `SessionsSidebar.Render` called `renderRows` over every
+projected row and then sliced the visible window, so the inbox view (which
+projects every loaded session, unlike the capped grouped view) paid
+O(total sessions) styling per frame/keypress. Rendering only
+`[scroll, scroll+bodyHeight)` makes frame cost independent of total rows.
+
+Change: `internal/ui/model/sessionsidebar.go` (`renderRows` takes a
+`[start,end)` window; Render clamps scroll first, then renders the window).
+Row rendering is per-row pure, so output is identical. Tests:
+`sessionsidebar_window_test.go` (window == slice of full render across
+MoveDown/MoveUp/MoveBottom/MoveTop, live busy-reorder update, search
+filter, exit search; both views). Bench: `BenchmarkSidebarScale`
+(frame + navigate-down key, 20k/100k, inbox + grouped) in
+`sessionsidebar_jank_test.go`.
+
+Load avg: 1.15 (before), 4.0 -> 2.2 (after). GOMAXPROCS=4, count=10:
+
+| bench | before | after | delta |
+| --- | --- | --- | --- |
+| frame 20k inbox | 366.4ms | 2.24ms | -99.39% (p=0.000) |
+| key 20k inbox | 380.8ms | 2.05ms | -99.46% (p=0.000) |
+| frame 100k inbox | 1807ms | 6.97ms | -99.61% (p=0.000) |
+| key 100k inbox | 1820ms | 6.58ms | -99.64% (p=0.000) |
+| frame 20k grouped | 3.44ms | 1.85ms | -46.31% (p=0.000) |
+| frame 100k grouped | 16.95ms | 6.42ms | -62.12% (p=0.000) |
+| B/op frame 100k inbox | 48.8MiB | 42KiB | -99.9% |
+
+Jank probe (inbox, per 500-session page apply + frame), before = attempt 38
+finalization numbers:
+
+| size | gap max | gap p99 | gap p50 | frame max | key max |
+| --- | --- | --- | --- | --- | --- |
+| 10x2000 before | 413ms | 413ms | 219ms | 403ms | - |
+| 10x2000 after | 13.8ms | 13.8ms | 6.3ms | 4.8ms | 2.2ms |
+| 20x5000 before | 2.01s | 2.00s | 956ms | 1.95s | 1.9s |
+| 20x5000 after | 79ms | 76ms | 26ms | 8.4ms | 7.1ms |
+| 100x5000 before | did not finish (20 min) | | | | |
+| 100x5000 after | 1.92s | 505ms | 226ms | 105ms (p99 31ms) | 49ms |
+
+Target (inbox frame < 16ms at 100k) met: 7.0ms. Remaining cost at 500k
+sessions is the per-page merge + `rebuildRows` (filter/sort of every
+session) in `ApplyBackgroundSessions`, plus the O(n) `SessionCounts`
+summary; candidate for a later incremental inbox projection. 300x5000 not
+run. go test -race ./internal/ui/model, go vet, GOOS=windows go vet ./...,
+golangci-lint: pass. KEPT.

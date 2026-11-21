@@ -433,3 +433,9 @@ navigator is visible, and TUI memory per held session at 1M+ sessions.
 - New top hotspot: inbox-view sidebar render is O(total sessions) per frame
   (~2s/frame at 100k sessions); grouped view ~10-20ms. See
   `TestSidebarJankProbe` (`SIDEBAR_JANK=WSxN`).
+
+Attempt 39: sidebar inbox view rendered every projected row per frame
+(0.37s at 20k, 1.8s at 100k). Now only the visible window is rendered:
+inbox frame 7ms / key 6.6ms at 100k (grouped 6.4ms). Next at 500k: per-page
+`ApplyBackgroundSessions` -> `rebuildRows` full filter+sort (~0.2-0.5s/page
+at 100x5000) and O(n) `SessionCounts`.

@@ -1258,7 +1258,6 @@ func (s *SessionsSidebar) Render(width, height int, focused bool) string {
 		s.restoreCursor(prevID)
 	}
 
-	rendered := s.renderRows(width, focused)
 	// Clamp scroll so the cursor stays visible within bodyHeight.
 	if s.cursor >= s.scroll+bodyHeight {
 		s.scroll = s.cursor - bodyHeight + 1
@@ -1269,11 +1268,10 @@ func (s *SessionsSidebar) Render(width, height int, focused bool) string {
 	if s.scroll < 0 {
 		s.scroll = 0
 	}
-	end := min(len(rendered), s.scroll+bodyHeight)
-	for i := s.scroll; i < end; i++ {
-		lines = append(lines, rendered[i])
-	}
-	if len(rendered) == 0 {
+	// Only the visible window is rendered so frame cost is independent of
+	// the total number of loaded rows.
+	lines = append(lines, s.renderRows(width, focused, s.scroll, s.scroll+bodyHeight)...)
+	if len(s.rows) == 0 {
 		lines = append(lines, t.Resource.AdditionalText.Render("No sessions yet"))
 	}
 
@@ -1376,14 +1374,21 @@ func plural(n int, word string) string {
 	return word + "s"
 }
 
-// renderRows renders each navigable row to a styled line at the given width.
+// renderRows renders the navigable rows in [start, end) (clamped to the row
+// list) to styled lines at the given width.
 // focused reports whether the sidebar owns keyboard focus. When it does not,
 // the cursor row is marked with the selection bar alone rather than a
 // full-row highlight, so it does not compete with the editor caret.
-func (s *SessionsSidebar) renderRows(width int, focused bool) []string {
+func (s *SessionsSidebar) renderRows(width int, focused bool, start, end int) []string {
 	t := s.com.Styles
-	out := make([]string, 0, len(s.rows))
-	for i, r := range s.rows {
+	start = max(0, start)
+	end = min(len(s.rows), end)
+	if start >= end {
+		return nil
+	}
+	out := make([]string, 0, end-start)
+	for i := start; i < end; i++ {
+		r := s.rows[i]
 		selected := i == s.cursor
 		switch r.kind {
 		case sidebarRowSpacer:

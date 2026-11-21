@@ -180,3 +180,26 @@ func BenchmarkSidebarApplyPage(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkSidebarScale measures one frame and one navigate-down keypress
+// (move + frame) of a fully loaded navigator at 20k and 100k sessions.
+func BenchmarkSidebarScale(b *testing.B) {
+	for _, sz := range []struct{ ws, n int }{{20, 1000}, {100, 1000}} {
+		for _, inbox := range []bool{true, false} {
+			s, all := jankSidebar(b, sz.ws, sz.n, inbox)
+			loadAll(s, all)
+			name := fmt.Sprintf("%dk/inbox=%v", sz.ws*sz.n/1000, inbox)
+			b.Run("frame/"+name, func(b *testing.B) {
+				for range b.N {
+					_ = s.Render(60, 50, true)
+				}
+			})
+			b.Run("key/"+name, func(b *testing.B) {
+				for range b.N {
+					s.MoveDown()
+					_ = s.Render(60, 50, true)
+				}
+			})
+		}
+	}
+}
