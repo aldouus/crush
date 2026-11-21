@@ -100,19 +100,26 @@ func (e *ignoreEntry) fresh() bool {
 	return true
 }
 
-// ignoreCacheMaxEntries bounds memory for servers that open many work trees.
-const ignoreCacheMaxEntries = 128
+// ignoreCacheMaxEntries bounds memory for servers that open many work trees;
+// the least recently used entry is evicted when full.
+const ignoreCacheMaxEntries = 1024
 
 // ignoreCacheStore maps a cleaned absolute work tree to its *ignoreEntry.
 type ignoreCacheStore struct {
 	mu      sync.Mutex
 	entries map[string]*ignoreEntry
+	used    map[string]uint64
+	tick    uint64
 }
 
 func (s *ignoreCacheStore) Load(root string) (*ignoreEntry, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e, ok := s.entries[root]
+	if ok {
+		s.tick++
+		s.used[root] = s.tick
+	}
 	return e, ok
 }
 
@@ -121,22 +128,28 @@ func (s *ignoreCacheStore) Store(root string, e *ignoreEntry) {
 	defer s.mu.Unlock()
 	if s.entries == nil {
 		s.entries = map[string]*ignoreEntry{}
+		s.used = map[string]uint64{}
 	}
-	if _, ok := s.entries[root]; !ok {
-		for k := range s.entries {
-			if len(s.entries) < ignoreCacheMaxEntries {
-				break
+	if _, ok := s.entries[root]; !ok && len(s.entries) >= ignoreCacheMaxEntries {
+		oldest, oldestUsed := "", uint64(0)
+		for k, u := range s.used {
+			if oldest == "" || u < oldestUsed {
+				oldest, oldestUsed = k, u
 			}
-			delete(s.entries, k)
 		}
+		delete(s.entries, oldest)
+		delete(s.used, oldest)
 	}
+	s.tick++
 	s.entries[root] = e
+	s.used[root] = s.tick
 }
 
 func (s *ignoreCacheStore) Delete(root string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.entries, root)
+	delete(s.used, root)
 }
 
 func (s *ignoreCacheStore) Len() int {

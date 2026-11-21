@@ -58,3 +58,30 @@ func BenchmarkCheckpointReopen(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkIgnoreCacheCycle300 reads ignore patterns round-robin across 300
+// small work trees, as a server hosting hundreds of workspaces does.
+func BenchmarkIgnoreCacheCycle300(b *testing.B) {
+	root := b.TempDir()
+	dirs := make([]string, 300)
+	for i := range dirs {
+		d := filepath.Join(root, "ws"+strconv.Itoa(i))
+		for j := range 8 {
+			_ = os.MkdirAll(filepath.Join(d, "p"+strconv.Itoa(j)), 0o755)
+		}
+		_ = os.WriteFile(filepath.Join(d, ".gitignore"), []byte("*.log\n"), 0o644)
+		dirs[i] = d
+	}
+	ignoreCache = ignoreCacheStore{}
+	for _, d := range dirs {
+		_, _ = readIgnorePatterns(d)
+	}
+	b.ReportAllocs()
+	i := 0
+	for b.Loop() {
+		if _, err := readIgnorePatterns(dirs[i%len(dirs)]); err != nil {
+			b.Fatal(err)
+		}
+		i++
+	}
+}

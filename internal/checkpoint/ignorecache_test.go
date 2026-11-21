@@ -157,3 +157,18 @@ func TestReadIgnorePatternsNewNestedIgnore(t *testing.T) {
 	require.NoError(t, os.RemoveAll(filepath.Join(dir, "a", "b")))
 	requireMatchesFresh(t, dir)
 }
+
+func TestIgnoreCacheLRU(t *testing.T) {
+	var s ignoreCacheStore
+	for i := range ignoreCacheMaxEntries {
+		s.Store(filepath.Join("/x", strconv.Itoa(i)), &ignoreEntry{})
+	}
+	_, ok := s.Load("/x/0")
+	require.True(t, ok)
+	s.Store("/new", &ignoreEntry{})
+	_, ok = s.Load("/x/0")
+	require.True(t, ok)
+	_, ok = s.Load("/x/1")
+	require.False(t, ok)
+	require.Equal(t, ignoreCacheMaxEntries, s.Len())
+}

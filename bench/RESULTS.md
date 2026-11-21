@@ -26,6 +26,7 @@
 | 32 | Scale baseline: hundreds of workspaces x thousands of sessions (baseline only) | ready / overview vs N x M | 10x200: 197 ms ready, 0.3 MB | 300x5000: 4357 ms ready, 75-111 MB, 136-189/300 ws unavailable | n/a | BASELINE |
 | 33 | Bounded workspace overview (top-50 sessions per workspace + session_count) | TUI ready ms (reuse, 10x200 / 100x2000 / 100x5000 / 300x2000 / 300x5000) | 190 / 1196 / 2696 / 3527 / 4460 | 188 / 341 / 571 / 620 / 4004 | -1% (ns) / -72% / -79% / -82% / -10% | KEPT |
 | 34 | Bounded peek fan-out + stale fallback, cached sorted overviews, in-memory registry | TUI ready ms (reuse, 10x200 / 100x2000 / 100x5000 / 300x2000 / 300x5000); unavailable @300x5000 | 190 / 376 / 1151 / 651 / 4005; 215 unavailable | 187 / 275 / 370 / 399 / 1656; 0 unavailable | -1% (ns) / -27% / -68% / -39% / -59% | KEPT |
+| 35 | LRU prompt-input / gitignore caches, caps 256/128 -> 1024 (scale fix 7, partial) | 300-workspace round-robin cycle: ns/op, hit% | prompt 23.5 us, 72.8% hit; ignore 906 us, 248 allocs | prompt 239 ns, 100% hit; ignore 176 us, 71 allocs | -99% / -81% (p=0.000) | KEPT |
 
 ## Attempt 01: Lazy gh/gh-stack probes
 
@@ -1135,3 +1136,31 @@ workspaces (-96..-99.8%, p=0.000); allocs 108..15026 -> 3.
 - **Verdict**: KEPT. Large points -27..-68% (p=0.0002), 300x5000 now 0
   unavailable (was 215), 10x200 unchanged (-1.4%, p=0.43). go test -race
   (backend, registry, server, workspace), go vet, golangci-lint clean.
+
+## Attempt 35: LRU prompt-input and gitignore caches (scale fix 7, partial)
+
+- **Hypothesis**: with >cap workspaces, arbitrary-entry eviction in the
+  prompt-input cache (256) and gitignore cache (128) thrashes; true LRU plus
+  a cap of 1024 keeps ~500+ workspaces resident with bounded memory.
+- **Change**: `internal/agent/prompt/cache.go` (LRU via use tick, cap 1024),
+  `internal/checkpoint/ignorecache.go` (LRU via use tick, cap 1024); new
+  benches `BenchmarkInputCacheCycle300`, `BenchmarkIgnoreCacheCycle300`;
+  tests `TestInputCacheLRU`, `TestIgnoreCacheLRU`.
+- **Not done**: the 5 s prompt TTL was kept. The git-status fingerprint
+  (HEAD/index/refs) cannot see unstaged work-tree edits and the skills
+  fingerprint cannot see nested edits, so removing the TTL would serve
+  stale prompts; stat revalidation alone is not correct here. The peek
+  cache bound (backend) was not addressed. The TUI ready-time scale matrix
+  was not rerun: neither cache is on the overview/ready path (prompt build
+  and checkpoint init only), so the Go cycling benches are the target metric.
+- **Results** (GOMAXPROCS=4, count=10, load 3.1-3.3):
+
+| bench | before | after | delta |
+|---|---|---|---|
+| InputCacheCycle300 (50 us compute) | 23.5 us, 72.8% hit | 239 ns, 100% hit | -99.0% (p=0.000) |
+| IgnoreCacheCycle300 | 906 us, 34.1 KiB, 248 allocs | 176 us, 9.4 KiB, 71 allocs | -80.6% (p=0.000) |
+| PromptGitStatusHit | 94.4 us | 99.7 us | ~ (p=0.39) |
+| CheckpointReopen | 624 us | 617 us | ~ (p=0.32) |
+
+- **Verdict**: KEPT. go test -race, go vet, golangci-lint clean on
+  checkpoint and agent/prompt.

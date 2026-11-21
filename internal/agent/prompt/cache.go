@@ -21,12 +21,14 @@ import (
 const inputCacheTTL = 5 * time.Second
 
 // inputCacheMaxEntries bounds per-cache memory for servers that host many
-// workspaces; expired entries are pruned first, then arbitrary ones.
-const inputCacheMaxEntries = 256
+// workspaces (entries are small: a git status string or a skills slice);
+// expired entries are pruned first, then the least recently used.
+const inputCacheMaxEntries = 1024
 
 type cachedInput[T any] struct {
 	key   string
 	at    time.Time
+	used  uint64
 	value T
 }
 
@@ -37,6 +39,7 @@ type cachedInput[T any] struct {
 type inputCache[T any] struct {
 	mu      sync.Mutex
 	entries map[string]cachedInput[T]
+	tick    uint64
 	group   singleflight.Group
 	now     func() time.Time
 	// refingerprint re-reads the fingerprint after compute, for inputs
@@ -52,6 +55,9 @@ func (c *inputCache[T]) get(id string, fingerprint func() string, compute func()
 	key := fingerprint()
 	c.mu.Lock()
 	if e, ok := c.entries[id]; ok && e.key == key && c.now().Sub(e.at) < inputCacheTTL {
+		c.tick++
+		e.used = c.tick
+		c.entries[id] = e
 		c.mu.Unlock()
 		return e.value
 	}
@@ -68,7 +74,8 @@ func (c *inputCache[T]) get(id string, fingerprint func() string, compute func()
 		}
 		c.mu.Lock()
 		c.pruneLocked(id)
-		c.entries[id] = cachedInput[T]{key: after, at: start, value: value}
+		c.tick++
+		c.entries[id] = cachedInput[T]{key: after, at: start, used: c.tick, value: value}
 		c.mu.Unlock()
 		return value, nil
 	})
@@ -85,12 +92,16 @@ func (c *inputCache[T]) pruneLocked(id string) {
 			delete(c.entries, k)
 		}
 	}
-	for k := range c.entries {
-		if len(c.entries) < inputCacheMaxEntries {
-			break
-		}
-		delete(c.entries, k)
+	if len(c.entries) < inputCacheMaxEntries {
+		return
 	}
+	oldest, oldestUsed := "", uint64(0)
+	for k, e := range c.entries {
+		if oldest == "" || e.used < oldestUsed {
+			oldest, oldestUsed = k, e.used
+		}
+	}
+	delete(c.entries, oldest)
 }
 
 func (c *inputCache[T]) reset() {

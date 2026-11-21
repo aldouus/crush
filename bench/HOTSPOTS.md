@@ -372,6 +372,13 @@ DBs (fix 3, SQL LIMIT), splitByOwner copying every session per request,
 JSON encode of the full (peer/mobile) response, and the unbounded peek
 cache (fix 7).
 
+### Status after attempt 35
+
+Fix 7 partial: prompt-input and gitignore caches are LRU with cap 1024;
+300-workspace cycling hit rate 72.8% -> 100% (prompt) and gitignore read
+906 -> 176 us. The 5 s prompt TTL stays (fingerprints miss unstaged and
+nested-skill edits). Still open: bounding the backend peek cache.
+
 ### Ranked fix list
 
 1. **Paginate/limit the overview**: per-workspace top-K sessions (busy, unread, favorites + newest K, e.g. 50) plus a total count; fetch more on expand/scroll. Cuts payload ~100x at M=5000 and removes the O(N*M) from ready. Highest impact.

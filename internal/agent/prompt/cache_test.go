@@ -187,3 +187,14 @@ func TestCachedDiscoverSkillsEditsAndDeletes(t *testing.T) {
 	require.Empty(t, cachedDiscoverSkills([]string{other}))
 	require.Len(t, cachedDiscoverSkills(paths), 1)
 }
+
+func TestInputCacheLRU(t *testing.T) {
+	c := newInputCache[int]()
+	for i := range inputCacheMaxEntries {
+		c.get(strconv.Itoa(i), func() string { return "k" }, func() int { return i })
+	}
+	c.get("0", func() string { return "k" }, func() int { return -1 })
+	c.get("new", func() string { return "k" }, func() int { return 1 })
+	require.Equal(t, 0, c.get("0", func() string { return "k" }, func() int { return -1 }))
+	require.Equal(t, -1, c.get("1", func() string { return "k" }, func() int { return -1 }))
+}
