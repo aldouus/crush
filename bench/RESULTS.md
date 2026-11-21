@@ -27,6 +27,7 @@
 | 33 | Bounded workspace overview (top-50 sessions per workspace + session_count) | TUI ready ms (reuse, 10x200 / 100x2000 / 100x5000 / 300x2000 / 300x5000) | 190 / 1196 / 2696 / 3527 / 4460 | 188 / 341 / 571 / 620 / 4004 | -1% (ns) / -72% / -79% / -82% / -10% | KEPT |
 | 34 | Bounded peek fan-out + stale fallback, cached sorted overviews, in-memory registry | TUI ready ms (reuse, 10x200 / 100x2000 / 100x5000 / 300x2000 / 300x5000); unavailable @300x5000 | 190 / 376 / 1151 / 651 / 4005; 215 unavailable | 187 / 275 / 370 / 399 / 1656; 0 unavailable | -1% (ns) / -27% / -68% / -39% / -59% | KEPT |
 | 35 | LRU prompt-input / gitignore caches, caps 256/128 -> 1024 (scale fix 7, partial) | 300-workspace round-robin cycle: ns/op, hit% | prompt 23.5 us, 72.8% hit; ignore 906 us, 248 allocs | prompt 239 ns, 100% hit; ignore 176 us, 71 allocs | -99% / -81% (p=0.000) | KEPT |
+| 36 | Lazy owner lookup in replica delta Serve (scale fix 6, partial) | ServeDelta no-change poll (200 / 2000 / 5000 sessions) | 483 us / 2.92 ms / 6.87 ms | 175 us / 179 us / 178 us | -64% / -94% / -97% (p=0.000) | KEPT |
 
 ## Attempt 01: Lazy gh/gh-stack probes
 
@@ -1164,3 +1165,32 @@ workspaces (-96..-99.8%, p=0.000); allocs 108..15026 -> 3.
 
 - **Verdict**: KEPT. go test -race, go vet, golangci-lint clean on
   checkpoint and agent/prompt.
+
+## Attempt 36: Lazy owner lookup in replica delta Serve (scale fix 6, partial)
+
+- **Hypothesis**: the idle delta poll is O(sessions) only because `Serve`
+  builds the full owned-session set up front. Resolving ownership lazily
+  (point lookups per touched session, cached, switching to one bulk scan
+  after 64 distinct sessions) makes the no-change poll O(changes).
+- **Change**: `internal/replica/replica.go` (`ownerCheck`; full snapshot
+  path unchanged; `serveEmbeddings` buffers rows before ownership lookups
+  so it never nests a query under an open cursor, which deadlocked the
+  single-connection pool on the first try). Test
+  `TestServeDeltaFiltersByOwner` covers idle, point and bulk paths.
+- **Wire**: unchanged (same Batch/Change JSON), so mixed-version peers sync
+  as before; no protocol test needed beyond the existing round trips.
+- **Load**: 1.95 -> 2.68.
+
+| bench (GOMAXPROCS=4, count=10) | before | after | delta |
+|---|---|---|---|
+| ServeDelta 200 | 482.6 us, 24.3 KiB, 709 allocs | 174.9 us, 2.75 KiB, 81 allocs | -63.8% (p=0.000) |
+| ServeDelta 2000 | 2919 us, 294 KiB, 6127 allocs | 178.9 us, 2.75 KiB, 81 allocs | -93.9% (p=0.000) |
+| ServeDelta 5000 | 6872 us, 625 KiB, 15144 allocs | 178.0 us, 2.75 KiB, 81 allocs | -97.4% (p=0.000) |
+| FullSync 200 | 428.1 ms, 29.8 MiB | 435.3 ms, 29.8 MiB | ~ (p=0.58) |
+
+- **Not done (budget)**: paged/streamed full sync (FullSync still ~2.3
+  ms/session, unchanged) and the 3-node 100x2000 in-process run and
+  startup ready-time sweep; replica serving is not on the TUI startup path
+  so ready time is unaffected by this change.
+- **Verdict**: KEPT. go test -race (replica, backend), go vet,
+  golangci-lint clean.

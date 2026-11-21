@@ -332,7 +332,9 @@ cache (stat-revalidated, no TTL).
 
 ~2.3 ms/session full sync: 100 workspaces x 2000 sessions would be ~7.5 min
 of CPU per new replica. The no-op delta poll is O(M) (~1.4 us/session), so
-idle polling across 100x2000 costs ~0.3 s CPU per round. A 3-node
+idle polling across 100x2000 costs ~0.3 s CPU per round (attempt 36:
+no-op delta is now O(changes), ~0.18 ms flat at 200-5000 sessions;
+full sync paging still open). A 3-node
 in-process run at 100x2000 was not done (time budget).
 
 ### 7. Session list for one workspace (5000 sessions)

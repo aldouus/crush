@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -193,4 +194,36 @@ func TestReplicaFollowsHandoffBetweenOtherNodes(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, laptop.QueryRow(`SELECT title FROM sessions WHERE id='s1'`).Scan(&title))
 	require.Equal(t, "job on mini2", title)
+}
+
+func TestServeDeltaFiltersByOwner(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	a := open(t)
+	addSession(t, a, "mine", "mine")
+	addSession(t, a, "theirs", "theirs")
+	exec(t, a, `UPDATE sessions SET owner_node='other' WHERE id='theirs'`)
+	since := MaxSeq(ctx, a)
+
+	idle, err := Serve(ctx, a, "nodeA", since, MaxEmbed(ctx, a), false)
+	require.NoError(t, err)
+	require.False(t, idle.Full)
+	require.Empty(t, idle.Changes)
+
+	for i := range ownerBulkAfter + 5 {
+		addSession(t, a, fmt.Sprintf("bulk-%03d", i), "bulk")
+	}
+	addMessage(t, a, "m-mine", "mine")
+	addMessage(t, a, "m-theirs", "theirs")
+	b, err := Serve(ctx, a, "nodeA", since, 0, false)
+	require.NoError(t, err)
+	got := map[string]bool{}
+	for _, c := range b.Changes {
+		if c.Op == "U" {
+			got[valueString(c.Row["id"])] = true
+		}
+	}
+	require.True(t, got["m-mine"])
+	require.False(t, got["m-theirs"])
+	require.True(t, got[fmt.Sprintf("bulk-%03d", ownerBulkAfter+4)])
 }
