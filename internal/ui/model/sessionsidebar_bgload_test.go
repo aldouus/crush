@@ -122,6 +122,12 @@ type pagingStub struct {
 	calls    []string
 	fail     map[string]bool
 	state    workspace.ConnectionState
+	limits   []int
+}
+
+func (p *pagingStub) ListWorkspaceOverviewsLimit(_ context.Context, limit int) ([]proto.WorkspaceOverview, error) {
+	p.limits = append(p.limits, limit)
+	return nil, nil
 }
 
 func (p *pagingStub) BaseDir() string { return "/cur" }
@@ -213,9 +219,37 @@ func TestBackgroundLoader_LoadsAllCurrentFirst(t *testing.T) {
 			require.Len(t, ov.Sessions, 5)
 		}
 	}
-	// A search no longer needs an unbounded fetch.
+}
+
+// TestBackgroundLoader_SearchFullFetchUntilLoaded verifies "/" search asks
+// for unbounded overviews while the background load is incomplete, and
+// once it completes searches the paged-in sessions with bounded refreshes.
+func TestBackgroundLoader_SearchFullFetchUntilLoaded(t *testing.T) {
+	t.Parallel()
+	all := bgSessions("c", 700)
+	all[650].Title = "needle in the tail"
+	ws := &pagingStub{archiveStubWorkspace: &archiveStubWorkspace{}, state: workspace.ConnectionStateConnected, sessions: map[string][]proto.SessionOverview{
+		"/cur": all,
+	}}
+	m := newBgTestUI(t, ws)
+	m.leftSidebarVisible = true
+	m.leftSidebar.SetOverviews([]proto.WorkspaceOverview{boundedOverview("/cur", all, 50)})
+	m.maybeStartBackgroundLoad()
+
 	m.leftSidebar.EnterSearch()
-	require.False(t, !m.bgLoad.complete())
+	require.True(t, m.leftSidebar.Truncated())
+	m.loadWorkspaceOverviews()()
+	m.leftSidebar.ExitSearch()
+
+	drive(m, func() any { return bgLoadStartMsg{gen: m.bgLoad.gen} })
+	require.True(t, m.bgLoad.complete())
+	require.False(t, m.leftSidebar.Truncated())
+
+	m.leftSidebar.EnterSearch()
+	m.loadWorkspaceOverviews()()
+	typeQuery(m.leftSidebar, "needle")
+	require.Equal(t, []string{"c650"}, sessionOrder(m.leftSidebar))
+	require.Equal(t, []int{0, overviewSessionLimit}, ws.limits)
 }
 
 // TestBackgroundLoader_HiddenSidebarDefersRows verifies a hidden navigator
