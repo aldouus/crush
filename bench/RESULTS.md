@@ -8,6 +8,7 @@
 | 04 | Single-pass TUI frame flatten | `BenchmarkUIView` msgs=500 | 3.539 ms, 231.4 KiB | 3.451 ms, 236.6 KiB | ~ (p=0.48), +2.3% B/op | REVERTED |
 | 08 | Single-pass parts decode (dup of 09) | `BenchmarkMessageList` | 17.50 / 67.73 ms | 13.82 / 53.89 ms | -21% / -20% | KEPT (landed as 09) |
 | 10 | Markdown renderer / xchroma style memo | `BenchmarkMarkdownRender` | 39.82 ms | 38.55 ms | ~ (p=0.39) | REVERTED |
+| 11 | Startup harness + fast server-ready poll | cold TUI first frame / ready | 596.2 / 674.9 ms | 467.5 / 548.3 ms | -21.6% / -18.8% | KEPT |
 
 ## Attempt 01: Lazy gh/gh-stack probes
 
@@ -272,3 +273,45 @@
 - **Verdict**: KEPT (code already on HEAD as attempt 09). Wins hold despite
   much higher load during the after run. Remaining cost is the per-part
   `data` decode and the string->[]byte copy of the parts column.
+
+## Attempt 11: interactive startup harness + fast server-ready poll
+
+- **Harness**: `CRUSH_STARTUP_TRACE=<file>` (`internal/startuptrace`)
+  appends `<pid> <phase> <unix-ns>` once per phase per process. Client
+  phases: `main`, `server_ready`, `workspace_created`, `agent_init`,
+  `program_start`, `first_frame` (first `UI.View`), `overviews_loaded`;
+  server phases: `server_listen`, `ws_build`, `ws_config`, `ws_db`,
+  `ws_skills`, `ws_app`, `ws_done`. `bench/startup.py <bin> [runs]
+  [--warm]` runs the TUI under `script` (pty) in a fresh temp project with
+  isolated HOME/XDG/CRUSH_GLOBAL_* and a private `-H unix://<tmp>/s.sock`
+  (never the live daemon), measures from exec, "ready" = max(first_frame,
+  overviews_loaded), discards one warmup run, and kills every traced pid.
+  Wired into `bench/run.sh` (15 cold + 15 warm runs).
+- **Baseline breakdown (cold, n=20, median ms from exec)**: main 122.8,
+  server_listen 308.5, server_ready 435.3, ws_build 480.0, ws_config 487.1,
+  ws_db 527.3 (DB open+migrations ~40 ms), ws_done 533.3,
+  workspace_created 579.1, first_frame 595.5, ready 676.6. Warm server:
+  server_ready 119.3, workspace_created 265.3, first_frame 279.6,
+  ready 364.0.
+- **Hypothesis**: the biggest synchronous blocker before first frame on a
+  cold start is idle waiting: the server listens at ~308 ms but the client
+  only notices at ~435 ms because `readyPoller` backs off 100/200/400 ms
+  from the first probe. Probing every 10 ms for the first second (then the
+  old exponential backoff) should cut ~120 ms with no behavior change.
+- **Change**: `internal/cmd/ready_poll.go` (fast window),
+  `internal/cmd/ready_poll_test.go` (fast-window test; old backoff test
+  disables the window).
+- **Load avg**: 2.16 (start) / 2.70 (end).
+
+| Metric (cold, n=20) | Before | After | Delta |
+|---|---|---|---|
+| server_ready | 432.0 +- 12.0 ms | 306.6 +- 14.9 ms | -29.0% |
+| first_frame | 596.2 +- 14.5 ms | 467.5 +- 27.5 ms | -21.6% |
+| ready | 674.9 +- 16.0 ms | 548.3 +- 34.5 ms | -18.8% |
+| warm first_frame | 279.6 +- 18.8 ms | 282.3 +- 17.8 ms | ~ (unaffected path) |
+
+- **Verdict**: KEPT. Medians separated by >4x stddev. Next blockers:
+  ~120 ms of process init before `main` (paid twice on cold start: client
+  and spawned server), ~145 ms CreateWorkspace round trip on a warm server
+  (~45 ms between `ws_done` and the client seeing the response), and
+  ~80 ms first_frame -> overviews_loaded.
