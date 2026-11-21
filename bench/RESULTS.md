@@ -10,6 +10,7 @@
 | 10 | Markdown renderer / xchroma style memo | `BenchmarkMarkdownRender` | 39.82 ms | 38.55 ms | ~ (p=0.39) | REVERTED |
 | 11 | Startup harness + fast server-ready poll | cold TUI first frame / ready | 596.2 / 674.9 ms | 467.5 / 548.3 ms | -21.6% / -18.8% | KEPT |
 | 12 | Cluster networking benchmark harness (baseline only) | cluster join/RPC/overview/reconnect/sync | see attempt 12 | n/a | n/a | BASELINE |
+| 14 | Startup DB-open path (investigation) | `BenchmarkConnectExisting` (200 sessions / 20k msgs) | 5.149 ms | n/a | n/a | REVERTED (nothing avoidable) |
 
 ## Attempt 01: Lazy gh/gh-stack probes
 
@@ -372,3 +373,32 @@
   statement handles is negligible. Tests pass (`-race` on replica and
   cluster), vet + lint clean. Next: per-row owner lookups could be cached
   per session within a batch.
+
+## Attempt 14: startup DB-open path (investigation)
+
+- **Hypothesis**: on a realistic data dir, startup DB work (Connect:
+  lock, open, pragmas, migration check; then ListSessions) does avoidable
+  work: migrations re-checked via goose, redundant pragmas, or unneeded
+  queries before first frame.
+- **Method**: temporary `internal/db/connect_bench_test.go` populating a
+  temp data dir with 200 sessions x 100 messages (20k), then looping
+  `Connect(WithDataDirLock(true))` + `ListSessions` + `Release`, with a
+  CPU profile focused on the loop. Also reviewed `buildWorkspace` and
+  `app.New` for synchronous startup queries.
+- **Findings** (GOMAXPROCS=4, count=10): 5.149 ms +- 4%/op, 339.9 KiB,
+  1619 allocs. Breakdown: `PingContext` (driver open + DSN pragmas) ~85%
+  of Connect, and nearly all of that is SQLite's one-time schema parse
+  (`sqlite3InitOne`) triggered by the first pragma, which any first query
+  would pay anyway; data-dir lock ~7%; `schemaCurrent` ~5%; goose is
+  already skipped for an up-to-date DB (fast path exists). ListSessions
+  over 200 rows is ~1-2 ms of page reads. The 40 ms `ws_db` seen in
+  attempt 11 is migrations on a brand-new DB (first run only); on an
+  existing DB the whole DB path is ~3-5 ms of a ~470 ms cold first frame
+  (<1%). Swarm backfill, MCP init and update checks already run in
+  goroutines off the critical path.
+- **Change**: none kept (benchmark file removed per protocol).
+- **Load avg**: 1.91 (start) / 2.06 (end).
+- **Verdict**: REVERTED / no change. No single avoidable cost >3% of the
+  DB path exists; the remaining cost is inherent schema load + file I/O.
+  Startup time is better pursued in process init before `main` (~120 ms,
+  paid twice on cold start) and the CreateWorkspace round trip.
