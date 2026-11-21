@@ -246,6 +246,9 @@ def run_once(binary, root, sock, trace, proj, settle=0.4, timeout=30.0):
 
 
 def setup_fixture(binary, root, kind):
+    if kind == "scale":
+        # Prebuilt by bench/scale/gen (config, registry and DBs in place).
+        return f"{root}/work/ws0000", {"fixture": "scale", "root": root}
     write(f"{root}/config/crush/crush.json", json.dumps(FAKE_PROVIDER))
     proj = f"{root}/work/mono"
     info = {"fixture": kind}
@@ -274,6 +277,47 @@ def setup_fixture(binary, root, kind):
     info["extra_projects"] = len(extras)
     info["sessions_per_extra"] = 200
     return proj, info
+
+
+def rss_kb(pid):
+    out = subprocess.run(["ps", "-o", "rss=", "-p", str(pid)],
+                         capture_output=True, text=True).stdout.strip()
+    return int(out) if out else 0
+
+
+def probe_server(sock, pid, runs=5):
+    """Fetch /v1/workspace-overviews over the private socket: latency,
+    payload size, and server RSS before/after (peeks touch every DB)."""
+    import http.client
+    import socket
+
+    class UConn(http.client.HTTPConnection):
+        def connect(self):
+            self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self.sock.connect(sock)
+
+    res = {"rss_kb_before": rss_kb(pid), "lat_ms": []}
+    for _ in range(runs):
+        c = UConn("localhost", timeout=120)
+        t0 = time.time()
+        c.request("GET", "/v1/workspace-overviews")
+        r = c.getresponse()
+        body = r.read()
+        res["lat_ms"].append(round((time.time() - t0) * 1000, 1))
+        res["status"] = r.status
+        res["bytes"] = len(body)
+        try:
+            data = json.loads(body)
+            res["workspaces"] = len(data)
+            res["sessions"] = sum(len(w.get("sessions") or []) for w in data)
+            res["unavailable"] = sum(1 for w in data if w.get("unavailable"))
+            errs = [w.get("error") for w in data if w.get("error")]
+            res["first_error"] = errs[0] if errs else ""
+        except ValueError:
+            pass
+        c.close()
+    res["rss_kb_after"] = rss_kb(pid)
+    return res
 
 
 def summarize(results, mode):
@@ -331,7 +375,13 @@ def main():
         sys.exit(f"unknown mode {mode}")
     binary = os.path.abspath(args[0])
     runs = int(args[1]) if len(args) > 1 else 15
-    root = tempfile.mkdtemp(prefix="crush-startup-")
+    fixture_root = opt("--fixture-root")
+    probe = opt("--probe")
+    if fixture_root:
+        fixture = "scale"
+        root = fixture_root
+    else:
+        root = tempfile.mkdtemp(prefix="crush-startup-")
     for d in ("home", "config", "data", "cache", "state", "work"):
         os.makedirs(f"{root}/{d}", exist_ok=True)
     sock = f"{root}/s.sock"
@@ -375,12 +425,19 @@ def main():
                 first = r
                 continue
             results.append(r)
+        if probe and srv is not None:
+            info["probe"] = probe_server(sock, srv.proc.pid)
     finally:
         if srv is not None:
             srv.stop()
         _, _, pids = read_trace(alltrace)
         kill(pids | servers)
-        shutil.rmtree(root, ignore_errors=True)
+        if fixture_root:
+            for f in (sock, trace, alltrace):
+                if os.path.exists(f):
+                    os.unlink(f)
+        else:
+            shutil.rmtree(root, ignore_errors=True)
     if not results:
         sys.exit("no successful runs")
     print(f"fixture: {info}")

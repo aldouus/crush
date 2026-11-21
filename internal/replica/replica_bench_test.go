@@ -5,16 +5,24 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"github.com/taigrr/crush/internal/db"
 )
 
-const (
-	benchSessions = 200
-	benchMessages = 10
-)
+const benchMessages = 10
+
+// benchSessions defaults to 200; CRUSH_BENCH_REPLICA_SESSIONS overrides it
+// for the scale harness (bench/scale.sh).
+var benchSessions = func() int {
+	if n, err := strconv.Atoi(os.Getenv("CRUSH_BENCH_REPLICA_SESSIONS")); err == nil && n > 0 {
+		return n
+	}
+	return 200
+}()
 
 func seedBench(b *testing.B) *sql.DB {
 	conn := open(b)

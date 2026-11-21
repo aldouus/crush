@@ -23,6 +23,7 @@
 | 29 | Revalidate cached checkpoint gitignore in background; first snapshot waits | ready ms (reuse-teardown large / small) | 346.8 / 216.8 | 236.7 / 216.8 | -31.7% / 0% (noise) | KEPT |
 | 30 | Prefetch workspace overviews at UI Init instead of inside the Cmd | ready ms (reuse large / reuse-teardown large) | 203.9 / 234.6 | 170.2 / 199.1 | -16.5% / -15.1% | KEPT |
 | 31 | Final validation: repeated TUI attach FS/DB caching (+ bounded caches) | ready ms, f32dc805 vs final (reuse / reuse-teardown, small / large) | 228.7 / 324.2 / 302.3 / 765.3 | 165.6 / 191.7 / 165.7 / 196.8 | -28% / -41% / -45% / -74% | KEPT |
+| 32 | Scale baseline: hundreds of workspaces x thousands of sessions (baseline only) | ready / overview vs N x M | 10x200: 197 ms ready, 0.3 MB | 300x5000: 4357 ms ready, 75-111 MB, 136-189/300 ws unavailable | n/a | BASELINE |
 
 ## Attempt 01: Lazy gh/gh-stack probes
 
@@ -1010,3 +1011,30 @@ persistent private server is the correct tool here.
 - Test: `TestDeviceStreamCreditTimeoutSurvivesEarlyWake` (spurious broadcasts before the lease expires; the stream must still end with `endCreditTimeout`).
 - Verification: -race targeted count=30 ok, full internal/server -race ok, vet ok, golangci-lint 0 issues.
 - Status: KEPT (bug fix, not a perf attempt).
+
+## Attempt 32: Scale baseline (hundreds of workspaces x thousands of sessions)
+
+- **Hypothesis**: none (baseline only). Question from Tai: "what about when
+  there are hundreds of workspace and thousands of sessions each".
+- **Harness** (committed): `bench/scale/gen` (deterministic generator,
+  crush migrations via `db.Connect`, direct SQL inserts, registry entries),
+  `bench/scale/fixture.go`, `bench/scale.sh` (matrix), `bench/scale/summary.py`,
+  `bench/scale/scale_test.go` (PeekSessions, Service.List, Connect,
+  RegistryList, DecodeOverviews), `bench/startup.py --fixture-root/--probe`
+  (prebuilt fixture + direct overview fetch, payload size, server RSS),
+  `CRUSH_BENCH_REPLICA_SESSIONS` for `internal/replica` benches.
+  Run: `bench/scale.sh <crush-bin> bench/out/scale 10`.
+- **Fixtures**: `/Volumes/Store1/tmp/crush-scale-*` (mktemp), deleted after
+  each point; regenerate with the generator. All 9 points ran (max 3.8 GB,
+  34 s); nothing skipped. Private server/socket only, all nodes killed.
+- **Load avg**: 1.9-3.2.
+- **Key numbers** (reuse mode, ready ms / overview payload):
+  10x200 197 / 0.3 MB; 10x5000 530 / 6.9 MB; 100x2000 1147 / 27 MB;
+  100x5000 3015 / 67.5 MB; 300x2000 3547 / 81 MB; 300x5000 4357 / 75 MB
+  with 189/300 workspaces `unavailable` (peek 3 s timeout). first_frame
+  constant ~180 ms. Server RSS 114 MB (10x200) -> 550-830 MB (100-300 x
+  5000). Client decode of the 100x5000 payload: 963 ms, 380 MB alloc.
+  Replica FullSync 5000 sessions: 11.7 s; no-op delta 7 ms (O(M)).
+- **Details/curves/ranked fixes**: bench/HOTSPOTS.md "Scale: hundreds of
+  workspaces x thousands of sessions".
+- **Verdict**: BASELINE (no code optimization).

@@ -242,3 +242,121 @@ Invalidation rules:
   snapshot waits.
 - Caches bounded (256 prompt entries, 128 work trees).
 - DB discovery (~3 ms) intentionally uncached.
+
+## Scale: hundreds of workspaces x thousands of sessions
+
+Attempt 32 (baseline only, HEAD b1de0504). Harness: `bench/scale/gen`
+(deterministic fixture: N workspaces, each `work/wsNNNN/.crush/crush.db`
+migrated by crush's own `db.Connect`, M sessions x 4 messages + 3
+sessions x 300 messages, all registered in `workspaces.jsonl`; `-clone`
+fills one DB and copies it, so session IDs repeat across workspaces),
+`bench/scale.sh` (matrix + `bench/startup.py --fixture-root --probe`
+against a private persistent server), `bench/scale/summary.py`, Go
+benchmarks in `bench/scale/scale_test.go`. Fixtures in
+`/Volumes/Store1/tmp/crush-scale-*`, deleted after each point (300x5000 =
+3.8 GB, 34 s to generate; nothing skipped). Load avg 1.9-3.2.
+
+### 1/2/4. TUI attach ready, overview fetch, payload, server RSS (10 runs, target = ws0000)
+
+"ready" = overviews loaded into the sidebar. first_frame stayed ~175-180 ms
+at every point (not O(N*M)); everything after it is the overview fetch.
+"probe" = 5 direct `GET /v1/workspace-overviews` after the runs (warm
+peek cache). RSS before = after the attach runs (attach already fetched
+overviews once).
+
+| mode | N ws | M sess | ready ms (med +-sd) | overviews req ms | srv list_overviews ms | probe overview ms (med) | payload MB | sessions returned | unavailable | RSS MB before/after | disk MB |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| reuse | 10 | 200 | 197 +-65 | 20 | 6.0 | 12 | 0.3 | 2000 | 0 | 114/114 | 11 |
+| reuse | 10 | 2000 | 325 +-287 | 157 | 53.6 | 86 | 2.8 | 20000 | 0 | 166/168 | 55 |
+| reuse | 10 | 5000 | 530 +-96 | 360 | 87.0 | 209 | 6.9 | 50000 | 0 | 264/264 | 128 |
+| reuse | 100 | 200 | 273 +-144 | 117 | 10.4 | 56 | 2.7 | 20000 | 0 | 172/175 | 114 |
+| reuse | 100 | 2000 | 1147 +-303 | 983 | 111.3 | 492 | 27.0 | 200000 | 0 | 540/540 | 551 |
+| reuse | 100 | 5000 | 3015 +-892 | 2651 | 271.1 | 1618 | 67.5 | 500000 | 0 | 663/550 | 1284 |
+| reuse | 300 | 200 | 462 +-766 | 302 | 23.7 | 142 | 8.1 | 60000 | 0 | 296/310 | 344 |
+| reuse | 300 | 2000 | 3547 +-761 | 3036 | 309.3 | 1838 | 80.7 | 600000 | 0 | 368/723 | 1658 |
+| reuse | 300 | 5000 | 4357 +-361 | 4150 | 3104.0 | 4622 | 75.0 | 555000 | 189 | 833/653 | 3853 |
+| reuse-teardown | 10 | 200 | 265 +-56 | 24 | 8.3 | 24 | 0.3 | 2000 | 0 | 118/118 | 11 |
+| reuse-teardown | 10 | 2000 | 406 +-35 | 178 | 70.2 | 61 | 2.8 | 20000 | 0 | 165/165 | 55 |
+| reuse-teardown | 10 | 5000 | 561 +-26 | 345 | 88.5 | 134 | 6.9 | 50000 | 0 | 239/240 | 128 |
+| reuse-teardown | 100 | 200 | 316 +-267 | 116 | 15.4 | 56 | 2.7 | 20000 | 0 | 172/172 | 114 |
+| reuse-teardown | 100 | 2000 | 1202 +-56 | 987 | 115.5 | 467 | 27.0 | 200000 | 0 | 537/537 | 551 |
+| reuse-teardown | 100 | 5000 | 3288 +-464 | 3005 | 566.6 | 1390 | 67.5 | 500000 | 0 | 607/504 | 1284 |
+| reuse-teardown | 300 | 200 | 531 +-10 | 316 | 34.9 | 142 | 8.1 | 60000 | 0 | 284/284 | 344 |
+| reuse-teardown | 300 | 2000 | 3693 +-616 | 3302 | 401.6 | 1448 | 80.7 | 600000 | 0 | 660/758 | 1658 |
+| reuse-teardown | 300 | 5000 | 5511 +-1122 | 5240 | 3226.7 | 5299 | 110.7 | 820000 | 136 | 384/591 | 3853 |
+
+Scaling: payload and ready time are linear in total sessions N*M
+(~135 B/session on the wire; ~5-6 us/session ready). At 300x5000 the
+response is **wrong**: 136-189 of 300 workspaces come back
+`unavailable` ("timed out after 3s", peek stall guard), because 300
+peeks run with unbounded concurrency and contend.
+
+### 2b. Where the overview time goes (CPU pprof, server, 100x5000, warm cache, 10 s)
+
+- `server.jsonEncode` / json/v2 struct marshal of 500k `SessionOverview`: 28% of CPU.
+- `backend.sortSessionOverviews` (`sort.SliceStable` re-run every request on cached slices) via `peekOverviews.func1`: 13.5%.
+- `db.PeekSessions` (first/stale peeks): 28%. GC (scanObject, bulkBarrierPreWrite, madvise): ~25%.
+- Client decode (`BenchmarkDecodeOverviews`, 67 MB payload): **963 ms, 380 MB, 1.0M allocs** per fetch in the TUI process.
+
+### 3. DB discovery / open / registry (Go benchmarks, GOMAXPROCS=4, count=5)
+
+| bench | 200 | 2000 | 5000 |
+|---|---|---|---|
+| PeekSessions (one DB) | 5.1 ms / 190 KiB | 18.6 ms / 1.6 MiB | 45.3 ms / 5.3 MiB |
+| session.Service.List (attached, TUI picker) | 2.2 ms / 385 KiB | 21.2 ms / 4.5 MiB | 57.4 ms / 12 MiB |
+| db.Connect+Release (existing DB) | 3.6 ms | 3.8 ms | 3.8 ms |
+
+| RegistryList (5 records per ws) | 10 | 100 | 300 | 1000 |
+|---|---|---|---|---|
+| time / allocs | 191 us / 124 | 786 us / 1.5k | 2.9 ms / 4.5k | 12.2 ms / 15k |
+
+Connect is O(1) in M; peek and List are O(M) with no LIMIT; registry is
+O(records) (append-only JSONL, re-parsed every overview request).
+
+### 5. Prompt (256) / gitignore (128) caches with N > capacity
+
+Both evict an arbitrary map entry when full (not LRU). Simulated round-robin
+cycling over N workspaces (20 rounds): cap 128 -> hit 95% (N=100), 12%
+(N=300), 0.1% (N=1000); cap 256 -> 95% / 69% / 2%. The prompt cache also
+has a 5 s TTL, so a user switching workspaces slower than every 5 s gets
+~0% hits regardless of size; capacity only matters for the gitignore
+cache (stat-revalidated, no TTL).
+
+### 6. Replica sync (per workspace, `internal/replica` benches, `CRUSH_BENCH_REPLICA_SESSIONS`)
+
+| sessions (x10 msgs) | FullSync | wire | ServeDelta (no changes) |
+|---|---|---|---|
+| 200 | 430 ms, 31 MB alloc | 0.86 MB | 0.48 ms |
+| 2000 | 4.53 s, 328 MB | 8.6 MB | 2.9 ms |
+| 5000 | 11.7 s, 822 MB | 21.6 MB | 7.0 ms |
+
+~2.3 ms/session full sync: 100 workspaces x 2000 sessions would be ~7.5 min
+of CPU per new replica. The no-op delta poll is O(M) (~1.4 us/session), so
+idle polling across 100x2000 costs ~0.3 s CPU per round. A 3-node
+in-process run at 100x2000 was not done (time budget).
+
+### 7. Session list for one workspace (5000 sessions)
+
+Attached `session.Service.List` 57 ms / 12 MiB; the sidebar also receives
+every other workspace's sessions through the overview, so the picker's
+cost is dominated by item 1, not by its own workspace.
+
+### O(workspaces) / O(sessions) on the TUI launch path
+
+1. `internal/ui/model/sessionsidebar_wiring.go:50` -> `client.ListWorkspaceOverviews` -> `backend.listAllOverviews` (`internal/backend/overview.go:42`): returns every session of every workspace (O(N*M)), blocks "ready".
+2. `backend.peekOverviews` (`overview.go:122`): one goroutine per workspace, unbounded; at N=300 peeks hit the 3 s stall guard and workspaces are reported unavailable.
+3. `sortSessionOverviews` (`overview.go:195`): re-sorts cached peeks per request.
+4. `server.jsonEncode` of the whole slice + client `json.Unmarshal` (~1 s / 67 MB at 100x5000).
+5. `registry.Store.List` (`internal/registry/registry.go:96`): re-reads and dedups the JSONL each request, O(records).
+6. `db.PeekSessions` / `session.Service.List`: no LIMIT, O(M).
+7. `backend.peekCache` (`peek_cache.go`): unbounded, holds every detached workspace's full listing (RSS 550-830 MB at 100-300 x 5000).
+
+### Ranked fix list
+
+1. **Paginate/limit the overview**: per-workspace top-K sessions (busy, unread, favorites + newest K, e.g. 50) plus a total count; fetch more on expand/scroll. Cuts payload ~100x at M=5000 and removes the O(N*M) from ready. Highest impact.
+2. **Bound peek concurrency** (worker pool ~GOMAXPROCS) and serve stale cached results instead of marking unavailable; fixes the 300x5000 correctness bug.
+3. **Push LIMIT/ORDER into SQL** for peek and sidebar list (index on `sessions(parent_session_id, archived_at, updated_at DESC)`), so per-workspace cost is O(K) not O(M).
+4. **Cache the sorted, encoded overview per workspace** (keyed by dbStamp) and assemble incrementally; skip re-sort/re-encode for unchanged workspaces.
+5. **Compact/cached registry**: keep the deduped registry in memory, revalidate by file stat; compact on write.
+6. **Replica delta**: use a seq/updated index so the no-op poll is O(changes); stream full sync in pages.
+7. **LRU-size caches**: make the peek cache an LRU bounded by sessions held; switch prompt/gitignore caches to LRU (and size gitignore >= registry count), noting prompt TTL dominates.
