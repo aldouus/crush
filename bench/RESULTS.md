@@ -16,6 +16,7 @@
 | 17 | Pool peer response buffers in cluster `call` | ClusterOverviewFetch time/op | 1.898 ms | 1.509 ms | -20.5% | KEPT |
 | 18 | Startup LSP/MCP init off critical path (investigation) | cold TUI first frame / ready | 387.6 / 469.0 ms (no MCP) | 390.1 / 472.3 ms (slow MCP) | ~ (+0.7%, within 1 sd) | REVERTED (already async) |
 | 19 | Fork `git branch` once per workspace open | warm TUI first frame / ready | 235.4 / 318.8 ms | 215.2 / 297.6 ms | -8.6% / -6.6% (p<1e-11) | KEPT |
+| 21 | Long-poll join approval | `BenchmarkClusterJoinApprovalLatency` / `ColdJoin` | 1706 ms / 122.96 ms | 9.2 ms / 88.81 ms | -99.5% / -27.8% (p=0.000) | KEPT |
 
 ## Attempt 01: Lazy gh/gh-stack probes
 
@@ -590,3 +591,35 @@
   cheap. Next step: pprof a single onboarding View (dialog/lipgloss
   composition is the likely cost), or coalesce startup messages / render
   less often, since ready is bounded by N_msgs x View cost.
+
+## Attempt 21: cluster join approval latency (long-poll)
+
+- **Hypothesis**: `Join` re-polls `/cluster/v1/join` every 2 s
+  (`PollInterval` default), so an approved node waits up to 2 s (mean
+  ~1 s, more if approval lands just after a poll) before it learns it was
+  admitted. Holding a pending join response open until the request is
+  decided makes approval propagate in one RTT.
+- **Change**: `internal/cluster/rpc.go`, `node.go`, `ops.go`, new
+  `join_bench_test.go`. `joinRequestBody` gains optional `wait_ms`; the
+  server (capped at 20 s, below the 30 s peer client timeout) waits on a
+  `joinDecided` channel that `Approve`, `Deny` and `Stop` close, then
+  re-runs the exact same denied/member/key-pin checks. The client sends
+  the first request without `wait_ms` (so `OnPending` fires immediately),
+  then long-polls; if a call returns quickly (older server ignoring the
+  field) it falls back to sleeping `PollInterval`. Security semantics
+  unchanged: same mTLS key proof, same decision code path.
+- **Bench**: `BenchmarkClusterJoinApprovalLatency` (default interval,
+  approve 300 ms after pending, reports approval->Join-return). Base was
+  HEAD in a temp worktree with the same bench file. GOMAXPROCS=4,
+  count=10. Load 2.22 (start) / 1.85 (end).
+
+| Metric | Before | After | Delta |
+|---|---|---|---|
+| approve->joined | 1706 ms +-0% | 9.24 ms +-9% | -99.46% (p=0.000) |
+| ClusterColdJoin | 122.96 ms +-2% | 88.81 ms +-2% | -27.77% (p=0.000) |
+| ColdJoin B/op, allocs | 3.707 MiB, 29.6k | 3.717 MiB, 29.6k | ~ |
+
+- **Tests**: `go test -race ./internal/cluster` (14 runs; one early
+  unreproduced failure, then 13 passes incl. -count=8), new
+  `TestClusterJoinDenyWakesLongPoll`, vet, lint clean.
+- **Verdict**: KEPT.
