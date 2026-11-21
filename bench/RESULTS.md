@@ -21,6 +21,7 @@
 | 27 | Server-side cache of prompt git status + skills discovery | ready ms (reuse / reuse-teardown, small / large) | 288 / 356 / 448 / 698 | 195 / 236 / 217 / 520 | -32% / -34% / -52% / -26% | KEPT |
 | 28 | Process-wide cache of checkpoint gitignore patterns with stat revalidation | ready ms (reuse-teardown large / small) | 516.5 / 214.4 | 349.3 / 212.7 | -32.4% / -0.8% (noise) | KEPT |
 | 29 | Revalidate cached checkpoint gitignore in background; first snapshot waits | ready ms (reuse-teardown large / small) | 346.8 / 216.8 | 236.7 / 216.8 | -31.7% / 0% (noise) | KEPT |
+| 30 | Prefetch workspace overviews at UI Init instead of inside the Cmd | ready ms (reuse large / reuse-teardown large) | 203.9 / 234.6 | 170.2 / 199.1 | -16.5% / -15.1% | KEPT |
 
 ## Attempt 01: Lazy gh/gh-stack probes
 
@@ -887,3 +888,34 @@
   exceeds 2x the larger stddev (39 ms).
 - **Verdict**: KEPT. `go test -race`, vet, golangci-lint clean on
   internal/checkpoint.
+
+## Attempt 30: prefetch workspace overviews at UI Init
+
+- **Hypothesis**: the first_frame -> overviews_loaded gap is not the
+  server. Client trace (temporary per-Update/View spans plus new
+  `overviews_req_start`/`overviews_req_done` marks) showed: Bubble Tea runs
+  Init commands only ~17 ms after Init (after the startup terminal
+  messages), the request itself takes ~2-3 ms, and the result then queues
+  behind ~10 messages, each followed by a synchronous ~3-5 ms View, so it
+  lands ~35 ms after the response. Starting the fetch in a goroutine at
+  Init (instead of inside the Cmd) lets the result be ready the moment
+  Bubble Tea runs Init commands, so it is delivered ahead of the other
+  RPC-backed Init results.
+- **Change**: `internal/ui/model/sessionsidebar_wiring.go`
+  (`prefetchWorkspaceOverviews`, trace marks), `internal/ui/model/ui.go`
+  (Init uses it), `bench/startup.py` (new phases). Same request, same
+  message, same display; later refreshes unchanged.
+- **Results** (bench/startup.py, 16 runs, old/new back to back, load
+  3.05 -> 2.74; small runs had outliers from a concurrent `go test`):
+
+  | fixture / mode | old ready | new ready | delta | ff->ready old / new |
+  |---|---|---|---|---|
+  | large reuse | 203.9 +- 11.7 | 170.2 +- 14.8 | -16.5% | 66.4 / 32.7 |
+  | large reuse-teardown | 234.6 +- 30.3 | 199.1 +- 20.9 | -15.1% | 69.8 / 35.6 |
+  | small reuse | 197.1 +- 73.3 | 177.5 +- 104.5 | -9.9% (noisy) | 54.0 / 32.8 |
+  | small reuse-teardown | 234.4 +- 98.1 | 201.9 +- 23.5 | -13.9% | 59.2 / 35.5 |
+
+  Large reuse gap (34 ms) exceeds 2x the larger stddev (30 ms); first
+  frame unchanged everywhere. Remaining gap is Bubble Tea's own startup
+  messages each followed by a full View (~3 ms each).
+- **Verdict**: KEPT. vet, golangci-lint, tests clean on internal/ui/model.

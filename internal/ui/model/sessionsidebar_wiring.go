@@ -11,6 +11,7 @@ import (
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/taigrr/crush/internal/config"
 	"github.com/taigrr/crush/internal/proto"
+	"github.com/taigrr/crush/internal/startuptrace"
 	"github.com/taigrr/crush/internal/ui/dialog"
 	"github.com/taigrr/crush/internal/ui/util"
 	"github.com/taigrr/crush/internal/workspace"
@@ -45,12 +46,25 @@ type workspaceOverviewsMsg struct {
 // the Update goroutine.
 func (m *UI) loadWorkspaceOverviews() tea.Cmd {
 	return func() tea.Msg {
+		startuptrace.Mark("overviews_req_start")
 		overviews, err := m.com.Workspace.ListWorkspaceOverviews(context.Background())
+		startuptrace.Mark("overviews_req_done")
 		if err != nil {
 			return util.InfoMsg{Type: util.InfoTypeError, Msg: err.Error()}
 		}
 		return workspaceOverviewsMsg{overviews: overviews}
 	}
+}
+
+// prefetchWorkspaceOverviews starts the overview fetch right away instead of
+// when Bubble Tea gets around to running Init commands, which happens only
+// after the first frames and terminal queries are processed. The returned
+// command delivers the result.
+func (m *UI) prefetchWorkspaceOverviews() tea.Cmd {
+	done := make(chan tea.Msg, 1)
+	load := m.loadWorkspaceOverviews()
+	go func() { done <- load() }()
+	return func() tea.Msg { return <-done }
 }
 
 // toggleLeftSidebar shows/hides the left session navigator. Showing it also

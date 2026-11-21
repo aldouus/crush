@@ -48,7 +48,8 @@ import tempfile
 import time
 
 PHASES = ["main", "server_ready", "workspace_created", "agent_init",
-          "program_start", "first_frame", "overviews_loaded"]
+          "program_start", "first_frame", "overviews_req_start",
+          "overviews_req_done", "overviews_loaded"]
 MODES = ("cold", "warm-new", "reuse", "reuse-teardown")
 FAKE_PROVIDER = {
     "providers": {"fake": {
