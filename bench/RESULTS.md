@@ -6,6 +6,7 @@
 | 02 | Lazy chroma lexer registry (investigation) | CLI cold start (`--version`) | 111.1 ms | n/a | n/a | REVERTED |
 | 03 | Reuse TUI frame canvas | `BenchmarkUIView` msgs=500 | 4.061 ms, 1686 KiB | 3.527 ms, 232 KiB | -13.2% time, -86% B/op | KEPT |
 | 04 | Single-pass TUI frame flatten | `BenchmarkUIView` msgs=500 | 3.539 ms, 231.4 KiB | 3.451 ms, 236.6 KiB | ~ (p=0.48), +2.3% B/op | REVERTED |
+| 08 | Single-pass parts decode (dup of 09) | `BenchmarkMessageList` | 17.50 / 67.73 ms | 13.82 / 53.89 ms | -21% / -20% | KEPT (landed as 09) |
 | 10 | Markdown renderer / xchroma style memo | `BenchmarkMarkdownRender` | 39.82 ms | 38.55 ms | ~ (p=0.39) | REVERTED |
 
 ## Attempt 01: Lazy gh/gh-stack probes
@@ -244,3 +245,30 @@
 - **Verdict**: REVERTED. The hypothesis was already in place on HEAD, and
   the formatter tweak changed nothing measurable. Whatever cost is left
   sits in third-party glamour writer chains (WrapWriter/IndentWriter/MarginWriter).
+
+## Attempt 08: single-pass session message parts decode
+
+- **Hypothesis**: `UnmarshalParts` decoded the column into
+  `[]json.RawMessage`, then re-parsed each element into a
+  `{type, data RawMessage}` wrapper, then decoded `data`: three passes and
+  an extra copy per part. Decoding straight into `[]struct{Type; Data
+  RawMessage}` drops one full pass and one copy per part.
+- **Change**: `internal/message/message.go` (`UnmarshalParts`). A
+  concurrent session committed the byte-identical change as attempt 09
+  (a569ba22) while this attempt was measuring, so this commit only adds
+  `internal/message/parts_roundtrip_test.go` (MarshalParts ->
+  UnmarshalParts for every part type, plus empty, unknown-type and `null`
+  element error cases).
+- **Load avg**: 1.95 (before) / 6.68 -> 5.61 (after).
+
+| Benchmark | Before | After | Delta |
+|---|---|---|---|
+| MessageList/500 time | 17.50 ms | 13.82 ms | -21.03% (p=0.002) |
+| MessageList/2000 time | 67.73 ms | 53.89 ms | -20.43% (p=0.000) |
+| MessageList B/op | 2.943 / 12.01 MiB | 2.489 / 10.17 MiB | -15.4% (p=0.000) |
+| MessageList allocs | 18.57k / 74.10k | 15.32k / 61.10k | -17.5% (p=0.000) |
+| UISessionLoad | 21.35 / 28.53 ms | n/a | after-run build broken by a concurrent session's in-progress xchroma edit |
+
+- **Verdict**: KEPT (code already on HEAD as attempt 09). Wins hold despite
+  much higher load during the after run. Remaining cost is the per-part
+  `data` decode and the string->[]byte copy of the parts column.
