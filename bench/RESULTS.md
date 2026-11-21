@@ -402,3 +402,30 @@
   DB path exists; the remaining cost is inherent schema load + file I/O.
   Startup time is better pursued in process init before `main` (~120 ms,
   paid twice on cold start) and the CreateWorkspace round trip.
+
+## Attempt 15: skip the 25 ms readiness sleep on mesh start
+
+- **Hypothesis**: reconnect (28 ms) and cold-join mesh time (84 ms) are
+  dominated not by route backoff, gossip, or serial dials, but by
+  `StartMesh` itself: nats-server's `ReadyForConnections(10s)` sleeps a
+  fixed 25 ms whenever its first check fails, which it always does right
+  after `go srv.Start()`. Timing showed StartMesh = 28.4 ms of the 28.6 ms
+  reconnect; routes connect <0.2 ms after it returns.
+- **Change**: `internal/cluster/mesh.go`: `waitMeshReady` polls
+  `ReadyForConnections(1ms)` with a 200 us sleep up to the same 10 s
+  deadline. Same readiness semantics and failure path.
+- **Results** (GOMAXPROCS=4, count=10, benchstat):
+
+| Benchmark | Before | After | Delta |
+|---|---|---|---|
+| ClusterMeshReconnect time/op | 28.05 ms +-1% | 6.32 ms +-3% | -77.5% (p=0.000) |
+| ClusterMeshReconnect p99 | 28.79 ms | 11.55 ms | -59.9% |
+| ClusterColdJoin time/op | 194.7 ms +-2% | 123.6 ms +-3% | -36.6% (p=0.000) |
+| ClusterColdJoin mesh-ms | 84 | 13 | -84.5% |
+| B/op, allocs/op | | | -18% to -33% |
+
+- **Load avg**: 1.83 (start) / 3.08 (end).
+- **Verdict**: KEPT. `go test -race ./internal/cluster`, vet, lint clean.
+  Survivor-side route redial (fixed 1 s NATS `routeConnectDelay`, not
+  configurable) remains the next limit when the restarted peer cannot
+  dial out; remaining cold-join cost is pairing (~110 ms).

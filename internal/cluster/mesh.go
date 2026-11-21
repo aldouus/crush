@@ -137,7 +137,7 @@ func (n *Node) StartMesh(routeAddr string) (*Mesh, error) {
 	}
 	srv.SetLoggerV2(newNATSLogger(nil, n.id.Name, false), false, false, false)
 	go srv.Start()
-	if !srv.ReadyForConnections(10 * time.Second) {
+	if !waitMeshReady(srv, 10*time.Second) {
 		srv.Shutdown()
 		return nil, errors.New("mesh server did not become ready")
 	}
@@ -364,4 +364,20 @@ func WithMeshEndpoints(eps []Endpoint, meshPort int) []Endpoint {
 		out = append(out, Endpoint{Kind: EndpointNATS, Addr: net.JoinHostPort(h, strconv.Itoa(meshPort))})
 	}
 	return out
+}
+
+// waitMeshReady polls readiness in short steps. ReadyForConnections sleeps
+// 25ms after a failed check when given a longer timeout, which would add
+// that delay to every mesh start.
+func waitMeshReady(srv *natsserver.Server, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if srv.ReadyForConnections(time.Millisecond) {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(200 * time.Microsecond)
+	}
 }
