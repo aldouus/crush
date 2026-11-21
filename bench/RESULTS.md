@@ -13,6 +13,7 @@
 | 14 | Startup DB-open path (investigation) | `BenchmarkConnectExisting` (200 sessions / 20k msgs) | 5.149 ms | n/a | n/a | REVERTED (nothing avoidable) |
 | 15 | Skip 25 ms readiness sleep on mesh start | `BenchmarkClusterMeshReconnect` / `ColdJoin` | 28.05 ms / 194.7 ms | 6.32 ms / 123.6 ms | -77.5% / -36.6% (p=0.000) | KEPT |
 | 16 | Skip `git rev-parse` fork when no `.git` ancestor | hyperfine `crush dirs` (non-repo cwd) | 162.3 ms +-12.3 | 116.2 ms +-10.6 | -28.4% | KEPT |
+| 17 | Pool peer response buffers in cluster `call` | ClusterOverviewFetch time/op | 1.898 ms | 1.509 ms | -20.5% | KEPT |
 
 ## Attempt 01: Lazy gh/gh-stack probes
 
@@ -461,3 +462,28 @@
   `go test ./internal/config ./internal/cmd`, vet, lint clean. Inside a
   git repo the fork still happens (unchanged). Further `--version` wins
   need dropping chroma's eager init from the import graph (third-party).
+
+## Attempt 17: pool peer response buffers in cluster `call`
+
+- **Profile** (`BenchmarkClusterOverviewFetch`): 53% of bytes allocated
+  were `io.ReadAll` growing the response buffer by doubling per call;
+  CPU is mostly HTTP/2 + TLS syscalls. The sync-position-then-overview
+  ordering in `remoteView.refresh` is a correctness requirement (position
+  must not run ahead of data), so it was left serial.
+- **Hypothesis**: reusing a pooled `bytes.Buffer` for peer response bodies
+  removes the per-call growth garbage and GC pressure; `json.Unmarshal`
+  copies what it keeps, so results are identical.
+- **Change**: `internal/cluster/peer.go` (`respBufPool`, buffers > 1 MiB
+  not returned to the pool).
+- **Results** (GOMAXPROCS=4, -count=10, benchstat):
+
+| Benchmark | Before | After | Delta |
+|---|---|---|---|
+| ClusterOverviewFetch time/op | 1.898 ms +-4% | 1.509 ms +-8% | -20.5% (p=0.000) |
+| ClusterOverviewFetch p50 | 1824 us | 1417 us | -22.3% |
+| ClusterOverviewFetch B/op | 474.4 KiB | 219.8 KiB | -53.7% (p=0.000) |
+| ClusterCallAPI time/op | 452.4 us | 440.3 us | ~ (p=0.85) |
+
+- **Load avg**: 2.00 (start) / 2.96 (end).
+- **Verdict**: KEPT. `go test -race ./internal/cluster ./internal/server`,
+  vet, lint clean.
