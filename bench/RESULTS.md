@@ -552,3 +552,6 @@
 - **Verdict**: KEPT. Open delta separated by >2x stddev; `go test
   ./internal/backend`, vet, lint clean. Next biggest: fresh-DB migrations
   (~37 ms, only on first open of a project).
+- **Confirmation rerun** (warm n=20, HEAD~1 vs HEAD, load 3.01/3.62):
+  workspace_created 220.0 -> 197.6 ms, first_frame 233.9 -> 212.3 ms,
+  ready 311.6 -> 294.3 ms.
