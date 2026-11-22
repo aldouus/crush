@@ -32,6 +32,7 @@
 | 38 | Progressive background loading of workspace sessions (paged per-workspace overview + TUI loader) | TUI ready ms (reuse, 10x200 / 100x2000 / 100x5000 / 300x2000 / 300x5000) | 206 / 287 / 381 / 434 / 2014 | 189 / 292 / 393 / 408 / 1728 | no regression (all p>0.05 except 10x200 -7.8% p=0.04, 300x5000 -14% p=0.01, not claimed); full load 0.56 / 6.3 / 15.4 / 17.7 / 51.2 s | KEPT (feature) |
 | 39 | Inbox-view regression: render only the visible sidebar window (both views) | BenchmarkSidebarScale inbox frame / key (20k / 100k sessions) | 366 / 381 ms; 1807 / 1820 ms | 2.24 / 2.05 ms; 6.97 / 6.58 ms | -99.4% / -99.6% (p=0.000); grouped also -46% / -62% | KEPT |
 | 40 | Background loader: no fixed page gap, 2000/page, 2 workspaces in flight | fully loaded s (10x200 / 100x5000 / 300x5000) | 0.58 / 15.5 / 45.5 | 0.52 / 2.47 / 6.59 | -10% / -84% / -86% (MW p=0.05, n=3 min); ready no regression | KEPT |
+| 40b | Incremental sidebar projection on background apply (cached inbox sections + counts, hoisted filter query) | jank probe gap p99 / max, inbox / grouped (100x5000) | 570 / 1213 ms; 191 / 200 ms | 25 / 51 ms; 5.7 / 6.1 ms | -96% / -97%; 300x5000 probe 600s+ -> 27s; ready / fully loaded no regression | KEPT |
 
 ## Attempt 01: Lazy gh/gh-stack probes
 
@@ -1484,3 +1485,46 @@ not finish within 600s (pre-existing, same per-apply cost). go test -race
 -count=3 ./internal/ui/model, go vet, GOOS=windows go vet ./...,
 golangci-lint: pass. KEPT.
 
+
+## Attempt 40 part 2: incremental sidebar projection
+
+Hypothesis: each background page apply re-derived the whole inbox
+(filter + stable sort of every session with double indirection) and every
+frame recounted all sessions for the summary; `sessionMatchesFilter` also
+re-read and lowercased the search input per session. Patching only the
+workspaces that grew keeps the event loop responsive at 500k+ sessions.
+
+Change: `internal/ui/model/sessionsidebar.go`, `sessionsidebar_bg.go`.
+Inbox sections cached as `(UpdatedAt, wi, si)` refs sorted by the total
+order (UpdatedAt desc, wi, si), which equals the old stable sort; an apply
+drops the grown workspaces' refs and O(n)-merges their freshly sorted refs
+(double-buffered). Per-workspace `SessionCounts` cached and patched for
+grown workspaces; full rebuildRows and SetPendingSessions invalidate.
+Filter query computed once per pass; grouped view counts matches without
+allocating index slices and only collects up to the cap. New
+`sessionsidebar_proj_test.go`: 40 random sequences (pages, pending, edits
+with deletes, filter on/off, both views) assert incremental == full rebuild
+(rows and counts) after every step.
+
+Jank probe (`CRUSH_JANK_PROBE=1`, page 2000, HEAD 5d2bd77c vs change):
+
+| fixture / view | HEAD gap max / p99 / p50 | change gap max / p99 / p50 | frame p99 | key max |
+| --- | --- | --- | --- | --- |
+| 100x5000 inbox | 1213 / 570 / 226 ms | 51 / 25 / 9.6 ms | 48.5 -> 1.7 ms | 56 -> 1.5 ms |
+| 100x5000 grouped | 200 / 191 / 39 ms | 6.1 / 5.7 / 2.1 ms | 72 -> 1.1 ms | 77 -> 5.1 ms |
+| 300x5000 inbox | did not finish (600s) | 70 / 48 / 23 ms | 1.5 ms | 5.5 ms |
+| 300x5000 grouped | did not finish (600s) | 16 / 5.0 / 2.0 ms | 1.0 ms | 1.3 ms |
+
+Scale harness (`bench/startup.py --mode reuse --probe 1`, private socket,
+fixtures on /Volumes/Store1/tmp, back to back; raw `bench/out/attempt40b/`,
+load avg 2.8-3.9):
+
+| fixture | metric | HEAD | change | delta |
+| --- | --- | --- | --- | --- |
+| 100x5000 | ready (n=10) | 392 ms | 372 +-29 ms | -5% (HEAD sd 3.6s outlier) |
+| 100x5000 | fully loaded (n=3) | 2.52 +-0.90 s | 2.50 +-0.04 s | -1% (ns) |
+| 300x5000 | ready (n=10) | 692 ms | 627 +-63 ms | -9% (HEAD outlier) |
+| 300x5000 | fully loaded (n=3) | 6.45 +-0.64 s | 6.52 +-0.19 s | +1.1% (ns, server-bound) |
+
+go test -race -count=3 ./internal/ui/model, go vet, GOOS=windows go vet
+./..., golangci-lint: pass. KEPT.

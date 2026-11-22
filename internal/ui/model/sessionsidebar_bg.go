@@ -117,7 +117,7 @@ func (s *SessionsSidebar) AddBackgroundSessions(root string, page []proto.Sessio
 // into the listed overviews, re-sorting only workspaces that grew. Rows
 // already shown keep their relative order.
 func (s *SessionsSidebar) ApplyBackgroundSessions() {
-	changed := false
+	var changed []bool
 	for wi := range s.overviews {
 		ov := &s.overviews[wi]
 		w := s.bg.byRoot[ov.Root]
@@ -132,14 +132,42 @@ func (s *SessionsSidebar) ApplyBackgroundSessions() {
 		}
 		if w.appendNew(ov) {
 			s.sortWorkspaceSessions(wi)
-			changed = true
+			if changed == nil {
+				changed = make([]bool, len(s.overviews))
+			}
+			changed[wi] = true
 		}
 	}
-	if !changed {
+	if changed == nil {
 		return
 	}
 	prevID := s.selectedSessionID()
-	s.rebuildRows()
+	if s.mode == sidebarModeInbox && s.proj.inboxValid {
+		countsValid := s.proj.countsValid && len(s.proj.counts) == len(s.overviews)
+		s.reprojectInbox(changed)
+		if countsValid {
+			q := s.searchQuery()
+			for wi, c := range changed {
+				if c {
+					s.proj.counts[wi] = s.workspaceCounts(q, wi)
+				}
+			}
+		}
+	} else {
+		counts := s.proj.counts
+		countsValid := s.proj.countsValid && len(counts) == len(s.overviews)
+		s.rebuildRows()
+		if countsValid {
+			q := s.searchQuery()
+			for wi, c := range changed {
+				if c {
+					counts[wi] = s.workspaceCounts(q, wi)
+				}
+			}
+			s.proj.counts = counts
+			s.proj.countsValid = true
+		}
+	}
 	s.restoreCursor(prevID)
 }
 

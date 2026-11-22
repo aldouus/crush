@@ -445,3 +445,10 @@ flight, 10ms gap). Now 2000/page, 2 workspaces in flight, no gap: fully
 loaded 100x5000 15.5s -> 2.5s, 300x5000 45.5s -> 6.6s (server-bound;
 concurrency 4 no faster). Ready unchanged. Remaining: inbox apply
 (`rebuildRows`) ~0.5s per throttled apply at 100x5000.
+
+Attempt 40 part 2: inbox `rebuildRows` per apply and per-frame
+`SessionCounts` replaced by an incremental projection (cached sorted inbox
+sections + per-workspace counts, patched only for grown workspaces). Apply
+gap p99 at 100x5000 570 -> 25 ms (inbox), 191 -> 5.7 ms (grouped);
+300x5000 probe now finishes (gap p99 48 ms). Remaining: O(n) merge + row
+emit per inbox apply and the full O(n) rebuild on SetOverviews refresh.
