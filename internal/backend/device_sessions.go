@@ -468,6 +468,15 @@ type SessionDeltaSource interface {
 	SessionOverviewDeltas(ctx context.Context, since map[string]*NodeSyncPos, fields proto.SessionOverviewFields) map[string]NodeSessionDelta
 }
 
+// MembershipSource is optionally implemented by a [SessionDeltaSource]
+// that can tell a node that left the cluster from one this member has
+// not learned about yet (membership still converging).
+type MembershipSource interface {
+	// NodeLeft reports whether nodeID, absent from this member's member
+	// list, should be treated as gone.
+	NodeLeft(nodeID string) bool
+}
+
 // NodeSessionDelta is one member's answer to a delta request.
 type NodeSessionDelta struct {
 	Sessions    []proto.DeviceSessionOverview
@@ -617,11 +626,22 @@ func (b *Backend) sessionOverviewDelta(ctx context.Context, q SessionOverviewQue
 			}
 		}
 		results := source.SessionOverviewDeltas(ctx, want, q.Fields)
+		membership, _ := source.(MembershipSource)
 		for _, id := range slices.Sorted(maps.Keys(since)) {
-			if _, member := results[id]; !member && id != selfID {
-				// The node left the cluster: clients drop its rows.
-				resetNodes = append(resetNodes, id)
+			if _, member := results[id]; member || id == selfID {
+				continue
 			}
+			if membership != nil && !membership.NodeLeft(id) {
+				// Not a member here yet, but not known to have left
+				// either (this member's view is still converging): keep
+				// the client's rows and position rather than dropping
+				// them.
+				staleNodes = append(staleNodes, id)
+				positions[id] = since[id]
+				continue
+			}
+			// The node left the cluster: clients drop its rows.
+			resetNodes = append(resetNodes, id)
 		}
 		for _, id := range slices.Sorted(maps.Keys(results)) {
 			res := results[id]
