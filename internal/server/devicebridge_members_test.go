@@ -18,11 +18,16 @@ func TestDeviceBridgePublishesMembersOnChange(t *testing.T) {
 	srv, c := initPhoneNode(t)
 	ph := pairPhone(t, srv, c)
 	require.Eventually(t, func() bool { return srv.pairing.bridge.Load() != nil }, deviceWait, 20*time.Millisecond)
-	nc, err := ph.connect(t)
-	require.NoError(t, err)
+	// The device's NATS user may still be installing right after pairing.
+	var nc *nats.Conn
+	require.Eventually(t, func() bool {
+		var err error
+		nc, err = ph.connect(t)
+		return err == nil
+	}, deviceWait, 50*time.Millisecond)
 	t.Cleanup(nc.Close)
 	notices := make(chan membersNotice, 8)
-	_, err = nc.Subscribe(subjClientRoot+ph.id+"."+verbMembers, func(m *nats.Msg) {
+	_, err := nc.Subscribe(subjClientRoot+ph.id+"."+verbMembers, func(m *nats.Msg) {
 		var n membersNotice
 		if json.Unmarshal(m.Data, &n) == nil {
 			notices <- n
