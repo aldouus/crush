@@ -75,6 +75,9 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case clusterSelfMsg:
 		m.handleClusterSelf(msg)
 	case serverVersionMsg:
+		// Piggyback on the version poll so joining or leaving a cluster
+		// shows up beside the version.
+		cmds = append(cmds, m.fetchClusterSelf())
 		m.versionMismatch = msg.mismatch
 		m.serverVersionStr = msg.version
 	case pairOfferMsg:

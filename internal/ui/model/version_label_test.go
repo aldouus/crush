@@ -19,6 +19,7 @@ func TestNodeVersionLabel(t *testing.T) {
 type nodeWorkspace struct {
 	sendWorkspace
 	node string
+	id   string
 	rows []cluster.NodeDashboard
 }
 
@@ -68,3 +69,29 @@ func (w *dashWorkspace) ClusterDashboard(context.Context) ([]cluster.NodeDashboa
 func (w *testWorkspace) NodeName() string { return "" }
 
 func (w *sendWorkspace) NodeName() string { return "" }
+
+func (w *testWorkspace) NodeID() string { return "" }
+
+func (w *sendWorkspace) NodeID() string { return "" }
+
+func (w *nodeWorkspace) NodeID() string { return w.id }
+
+func TestVersionLabelHidesRawNodeID(t *testing.T) {
+	t.Parallel()
+	u := newTestUI()
+	u.com.Workspace = &nodeWorkspace{node: "3f9c-id", id: "3f9c-id"}
+	require.NotContains(t, u.versionLabel(), "@")
+}
+
+func TestSidebarLogoFollowsNodeSwitch(t *testing.T) {
+	t.Parallel()
+	u := newTestUI()
+	ws := &nodeWorkspace{node: "mini2"}
+	u.com.Workspace = ws
+	u.cacheSidebarLogo(40)
+	require.Equal(t, u.versionLabel(), u.sidebarLogoLabel)
+	require.Contains(t, u.sidebarLogoLabel, "@mini2")
+
+	ws.node = "big"
+	require.NotEqual(t, u.versionLabel(), u.sidebarLogoLabel, "draw must notice the stale label")
+}

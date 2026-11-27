@@ -397,6 +397,10 @@ type UI struct {
 
 	// sidebarLogo keeps a cached version of the sidebar sidebarLogo.
 	sidebarLogo string
+	// sidebarLogoLabel and sidebarLogoWidth are what sidebarLogo was
+	// rendered with, so a node switch re-renders it.
+	sidebarLogoLabel string
+	sidebarLogoWidth int
 
 	// Notification state
 	notifyBackend       notification.Backend

@@ -215,6 +215,9 @@ func (m *UI) drawSidebar(scr uv.Screen, area uv.Rectangle) {
 		cwdLine = common.PrettyPath(t, styles.FolderIcon+" "+effectivePath, width)
 	}
 
+	if m.sidebarLogoWidth > 0 && m.versionLabel() != m.sidebarLogoLabel {
+		m.cacheSidebarLogo(m.sidebarLogoWidth)
+	}
 	sidebarLogo := m.sidebarLogo
 	if height < logoHeightBreakpoint {
 		sidebarLogo = logo.SmallRender(m.com.Styles, width, logo.Opts{

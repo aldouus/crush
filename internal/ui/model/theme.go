@@ -10,7 +10,9 @@ import (
 
 // cacheSidebarLogo renders and caches the sidebar logo at the specified width.
 func (m *UI) cacheSidebarLogo(width int) {
-	m.sidebarLogo = renderLogo(m.com.Styles, m.versionLabel(), true, m.com.IsHyper(), width)
+	m.sidebarLogoLabel = m.versionLabel()
+	m.sidebarLogoWidth = width
+	m.sidebarLogo = renderLogo(m.com.Styles, m.sidebarLogoLabel, true, m.com.IsHyper(), width)
 }
 
 // applyTheme replaces the active styles with the given theme, drops the

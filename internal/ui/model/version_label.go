@@ -17,6 +17,9 @@ type clusterSelfMsg struct{ name string }
 // server that is alone, or not clustered, reports no name.
 func (m *UI) fetchClusterSelf() tea.Cmd {
 	ws := m.com.Workspace
+	if ws == nil {
+		return nil
+	}
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -38,9 +41,6 @@ func (m *UI) handleClusterSelf(msg clusterSelfMsg) {
 		return
 	}
 	m.clusterSelfName = msg.name
-	if m.layout.sidebar.Dx() > 0 {
-		m.cacheSidebarLogo(m.layout.sidebar.Dx())
-	}
 }
 
 // versionLabel is the version shown in the side panel, prefixed with the
@@ -48,7 +48,11 @@ func (m *UI) handleClusterSelf(msg clusterSelfMsg) {
 func (m *UI) versionLabel() string {
 	node := ""
 	if m.com != nil && m.com.Workspace != nil {
-		node = m.com.Workspace.NodeName()
+		// NodeName falls back to the raw node id when the name is not
+		// known yet; an id is not worth showing.
+		if name := m.com.Workspace.NodeName(); name != m.com.Workspace.NodeID() {
+			node = name
+		}
 	}
 	if node == "" {
 		node = m.clusterSelfName
