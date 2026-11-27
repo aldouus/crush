@@ -154,8 +154,8 @@ func bashDescription(attribution *config.Attribution, modelName string) string {
 		Attribution:      *attribution,
 		ModelName:        modelName,
 		RgAvailable:      getRg() != "",
-		GhAvailable:      ghAvailable,
-		GhStackAvailable: ghStackAvailable,
+		GhAvailable:      ghAvailable(),
+		GhStackAvailable: ghStackAvailable(),
 	}); err != nil {
 		// this should never happen.
 		panic("failed to execute bash description template: " + err.Error())
@@ -367,10 +367,13 @@ func NewBashTool(permissions permission.Service, workingDir WorkingDirFunc, attr
 			autoBackgroundAfter := cmp.Or(params.AutoBackgroundAfter, DefaultAutoBackgroundAfter)
 			autoBackgroundThreshold := time.Duration(autoBackgroundAfter) * time.Second
 			timeout := time.After(autoBackgroundThreshold)
+			bgRequest := BackgroundRequest(ctx)
+			var bgRequested bool
 
 			var stdout, stderr string
 			var done bool
 			var execErr error
+			bgMessage := "Command is taking longer than expected and has been moved to background."
 
 		waitLoop:
 			for {
@@ -380,6 +383,13 @@ func NewBashTool(permissions permission.Service, workingDir WorkingDirFunc, attr
 					if done {
 						break waitLoop
 					}
+					if bgRequested && time.Since(startTime) >= BackgroundOnRequestAfter {
+						bgMessage = "The user sent a message while this command was running, so it has been moved to background."
+						break waitLoop
+					}
+				case <-bgRequest:
+					bgRequested = true
+					bgRequest = nil
 				case <-timeout:
 					stdout, stderr, done, execErr = bgShell.GetOutput()
 					break waitLoop
@@ -401,7 +411,7 @@ func NewBashTool(permissions permission.Service, workingDir WorkingDirFunc, attr
 
 			// Still running - keep as background job
 			go watchBackgroundJob(bgShell, sessionID, permission.PolicyFromContext(ctx), notify)
-			return backgroundedBashResponse(bgShell, params, startTime, fmt.Sprintf("Command is taking longer than expected and has been moved to background.\n\nBackground shell ID: %s\n\nUse job_output tool to view output or job_kill to terminate.", bgShell.ID)), nil
+			return backgroundedBashResponse(bgShell, params, startTime, fmt.Sprintf("%s\n\nBackground shell ID: %s\n\nUse job_output tool to view output or job_kill to terminate.", bgMessage, bgShell.ID)), nil
 		},
 	)
 }

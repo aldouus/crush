@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/taigrr/crush/internal/headless"
 	"github.com/taigrr/crush/internal/proto"
 	"github.com/taigrr/crush/internal/session"
+	"github.com/taigrr/crush/internal/termstatus"
 )
 
 // headlessClient is the subset of the server client used by
@@ -43,6 +45,7 @@ func runHeadless(
 	sess *proto.Session,
 	opts runOptions,
 	out io.Writer,
+	reportStatus bool,
 ) error {
 	emitter := headless.NewNDJSONEmitter(out)
 	var progress headless.Emitter
@@ -59,8 +62,14 @@ func runHeadless(
 		PermissionPolicy: opts.mode.Policy(),
 	}
 
+	status := newRunStatus(sess, reportStatus)
 	if opts.detach {
-		return runDetached(ctx, c, ws, sess, msg, cwd, opts.format, emitter, progress, out)
+		status.report(termstatus.StateWorking, "", "Running")
+		err := runDetached(ctx, c, ws, sess, msg, cwd, opts.format, emitter, progress, out)
+		if err != nil {
+			status.report(termstatus.StateError, "", firstLine(err.Error(), "Failed"))
+		}
+		return err
 	}
 
 	baseline := headless.TakeBaseline(ctx, c, ws.ID, sess.ID)
@@ -74,15 +83,18 @@ func runHeadless(
 
 	events, err := c.SubscribeEvents(ctx, ws.ID)
 	if err != nil {
+		status.report(termstatus.StateError, "", firstLine(err.Error(), "Failed"))
 		return reportRunError(out, opts.format, err)
 	}
 
 	if progress != nil {
 		if err := progress.Emit(initEvent(ws, sess, runID, cwd)); err != nil {
+			status.report(termstatus.StateError, "", firstLine(err.Error(), "Failed"))
 			return err
 		}
 	}
 
+	status.report(termstatus.StateWorking, "", "Running")
 	sendErr := make(chan error, 1)
 	go func() {
 		sendErr <- c.SendAgentMessage(ctx, ws.ID, msg)
@@ -97,6 +109,7 @@ func runHeadless(
 		Timeout:     opts.timeout,
 		StopOnBlock: opts.mode.Delegates(),
 		OnBlocked: func(p proto.PendingPrompts) {
+			status.reportBlocked(p)
 			if progress != nil {
 				_ = progress.Emit(headless.BlockedEvent{Type: headless.EventBlocked, SessionID: sess.ID, Pending: p})
 			}
@@ -117,7 +130,83 @@ func runHeadless(
 	enrichCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cancelTimeout)
 	defer cancel()
 	res := headless.Finish(enrichCtx, c, baseline, ws.ID, sess.ID, cwd, runID, outcome)
+	status.reportOutcome(outcome)
 	return writeResult(out, opts.format, emitter, res)
+}
+
+// runStatus reports one crush run on the root OSC 7501 record. It writes
+// to stderr so it never mixes with the run's stdout, and only when stderr
+// is a terminal.
+type runStatus struct {
+	title string
+	w     io.Writer
+	on    bool
+}
+
+func newRunStatus(sess *proto.Session, on bool) *runStatus {
+	title := ""
+	if sess != nil {
+		title = sess.Title
+	}
+	return &runStatus{title: title, w: os.Stderr, on: on}
+}
+
+func (s *runStatus) report(state termstatus.State, kind termstatus.Kind, msg string) {
+	if s == nil || !s.on {
+		return
+	}
+	_ = termstatus.Write(s.w, termstatus.Report{
+		State: state, Kind: kind, App: termstatus.AppCrush, Title: s.title, Message: msg,
+	})
+}
+
+func (s *runStatus) reportBlocked(p proto.PendingPrompts) {
+	switch {
+	case len(p.Permissions) > 0:
+		msg := p.Permissions[0].Description
+		if msg == "" {
+			msg = "Permission required"
+		}
+		s.report(termstatus.StateBlocked, termstatus.KindPermission, msg)
+	case len(p.Questions) > 0:
+		msg := p.Questions[0].Prompt
+		if msg == "" {
+			msg = "The agent has a question"
+		}
+		s.report(termstatus.StateBlocked, termstatus.KindQuestion, msg)
+	}
+}
+
+func (s *runStatus) reportOutcome(o headless.Outcome) {
+	switch o.Status {
+	case headless.StatusCompleted:
+		s.report(termstatus.StateDone, "", firstLine(o.Text, "Finished"))
+	case headless.StatusError:
+		s.report(termstatus.StateError, "", firstLine(o.Error, "Failed"))
+	case headless.StatusCancelled:
+		s.report(termstatus.StateIdle, "", "Cancelled")
+	case headless.StatusPermissionDenied:
+		s.report(termstatus.StateError, "", firstLine(o.Error, "Permission denied"))
+	case headless.StatusTimeout:
+		// The run is still going, so this must not be done: that record
+		// would outlive the process and claim the run had finished.
+		s.report(termstatus.StateIdle, "", "Still running")
+	case headless.StatusBlocked:
+		// Already reported from OnBlocked; leaving it set is the point.
+	default:
+		s.report(termstatus.StateIdle, "", "Ready")
+	}
+}
+
+func firstLine(s, fallback string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return fallback
+	}
+	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
+		s = s[:i]
+	}
+	return s
 }
 
 // runDetached hands the prompt to the server and reports the run as

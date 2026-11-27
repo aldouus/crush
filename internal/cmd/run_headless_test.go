@@ -195,7 +195,7 @@ func runHeadlessForTest(t *testing.T, ctx context.Context, c *fakeRunClient, opt
 	var out bytes.Buffer
 	opts.prompt = "do the thing"
 	sess := &proto.Session{ID: "sess-aaaa-bbbb", Color: "blue", Animal: "otter"}
-	err := runHeadless(ctx, c, testRunWorkspace(), sess, opts, &out)
+	err := runHeadless(ctx, c, testRunWorkspace(), sess, opts, &out, false)
 	if !opts.format.IsStructured() {
 		return []map[string]any{{"stdout": out.String()}}, err
 	}

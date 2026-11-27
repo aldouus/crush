@@ -2634,6 +2634,12 @@ definitions:
         type: string
       last_error:
         type: string
+      next_cursor:
+        description: |-
+          NextCursor, on a single-workspace page (root query parameter), is
+          passed back as after to fetch the following page. Empty on the
+          last page and on full listings.
+        type: string
       node_id:
         description: |-
           NodeID and NodeName identify the cluster node that owns the
@@ -2643,6 +2649,13 @@ definitions:
         type: string
       root:
         type: string
+      session_count:
+        description: |-
+          SessionCount is the workspace's total number of listed sessions
+          when the request asked for a bounded list (limit); Sessions then
+          holds only the first limit of them in display order. Zero when the
+          list is complete.
+        type: integer
       sessions:
         items:
           $ref: '#/definitions/proto.SessionOverview'
@@ -3931,6 +3944,26 @@ paths:
       x-crush-scope: sessions:prompt
   /workspace-overviews:
     get:
+      parameters:
+      - description: Max sessions per workspace (display order); session_count then
+          carries the total. Omitted or 0 lists all.
+        in: query
+        name: limit
+        type: integer
+      - description: 'Non-empty: only this node''s workspaces (node-to-node fetch)'
+        in: query
+        name: local
+        type: string
+      - description: 'Page one local workspace''s sessions: the response is that single
+          workspace, limit sessions after the after cursor, with next_cursor set while
+          more follow.'
+        in: query
+        name: root
+        type: string
+      - description: Paging cursor from a previous page's next_cursor (requires root)
+        in: query
+        name: after
+        type: string
       produces:
       - application/json
       responses:
@@ -3940,6 +3973,10 @@ paths:
             items:
               $ref: '#/definitions/proto.WorkspaceOverview'
             type: array
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/proto.Error'
         "500":
           description: Internal Server Error
           schema:

@@ -114,6 +114,12 @@ func (a *sessionAgent) enqueueCall(call SessionAgentCall) {
 	a.messageQueue.Update(call.SessionID, func(existing []SessionAgentCall, _ bool) ([]SessionAgentCall, bool) {
 		return append(existing, queued), true
 	})
+	if queued.RunID == "" && strings.HasPrefix(queued.Prompt, btwPrefix) {
+		// A /btw aside is folded in at the next step boundary; ask a
+		// long-running tool call to background itself so that comes
+		// sooner.
+		a.toolCancels.requestBackground(call.SessionID)
+	}
 }
 
 // enqueueIfActive queues call when its session already has an active
@@ -185,6 +191,9 @@ func (a *sessionAgent) drainQueueForStep(sessionID string, activePolicy permissi
 		fold = append(fold, queued)
 	}
 	a.setQueue(sessionID, keep)
+	if len(fold) > 0 {
+		a.toolCancels.clearBackgroundRequest(sessionID)
+	}
 	return fold, canceledWithRunID
 }
 
@@ -417,6 +426,7 @@ func (a *sessionAgent) PromoteNextQueuedToBTW(sessionID string) bool {
 	if !found {
 		return false
 	}
+	a.toolCancels.requestBackground(sessionID)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	a.publishRunComplete(ctx, promoted, notify.RunComplete{
@@ -594,6 +604,7 @@ func (a *sessionAgent) isSessionActive(sessionID string) bool {
 // through here so the idle wakeup is never missed.
 func (a *sessionAgent) clearActiveRequest(sessionID string) {
 	a.activeTurns.clear(sessionID)
+	a.toolCancels.clearBackgroundRequest(sessionID)
 	a.activeRequests.Del(sessionID)
 	a.signalIdle()
 }

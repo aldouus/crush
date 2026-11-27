@@ -1640,7 +1640,13 @@ func (w *ClientWorkspace) requestSwitch() {
 // ListWorkspaceOverviews returns all known workspaces (attached and
 // registry-known) with their sessions for the cross-workspace picker.
 func (w *ClientWorkspace) ListWorkspaceOverviews(ctx context.Context) ([]proto.WorkspaceOverview, error) {
-	ovs, err := w.home.ListWorkspaceOverviews(ctx)
+	return w.ListWorkspaceOverviewsLimit(ctx, 0)
+}
+
+// ListWorkspaceOverviewsLimit is [ClientWorkspace.ListWorkspaceOverviews]
+// keeping at most limit sessions per workspace (0 = all).
+func (w *ClientWorkspace) ListWorkspaceOverviewsLimit(ctx context.Context, limit int) ([]proto.WorkspaceOverview, error) {
+	ovs, err := w.home.ListWorkspaceOverviewsLimit(ctx, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1650,6 +1656,21 @@ func (w *ClientWorkspace) ListWorkspaceOverviews(ctx context.Context) ([]proto.W
 		return ov.Unavailable && ov.Root == ""
 	})
 	return w.qualifyOverviews(ovs), nil
+}
+
+// ListWorkspaceSessionsPage implements [Workspace]. root is an overview
+// root as returned by ListWorkspaceOverviewsLimit (possibly qualified).
+func (w *ClientWorkspace) ListWorkspaceSessionsPage(ctx context.Context, root, cursor string, limit int) (proto.WorkspaceOverview, error) {
+	_, c, plain := w.resolveRoot(root)
+	if c == nil {
+		return proto.WorkspaceOverview{}, fmt.Errorf("no client for workspace %q", root)
+	}
+	ov, err := c.ListWorkspaceSessionsPage(ctx, plain, cursor, limit)
+	if err != nil {
+		return proto.WorkspaceOverview{}, err
+	}
+	ov.Root = root
+	return ov, nil
 }
 
 // consumeEvents drives the workspace event loop. It is split out from

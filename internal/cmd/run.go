@@ -405,7 +405,7 @@ func runNonInteractive(
 
 	if !opts.usesLegacyTextStream() {
 		stopSpinner()
-		return runHeadless(ctx, c, ws, sess, opts, os.Stdout)
+		return runHeadless(ctx, c, ws, sess, opts, os.Stdout, stderrTTY && progress)
 	}
 	prompt := opts.prompt
 

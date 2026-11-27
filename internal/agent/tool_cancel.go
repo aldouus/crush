@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 
+	"github.com/taigrr/crush/internal/agent/tools"
 	"github.com/taigrr/crush/internal/permission"
 	"github.com/taigrr/fantasy"
 )
@@ -25,15 +26,21 @@ type toolCancelRegistry struct {
 	mu        sync.Mutex
 	nextID    uint64
 	bySession map[string]*sessionToolCalls
+	// bgPending marks sessions with an outstanding background request so
+	// tool calls that start before the request is satisfied are signaled
+	// on registration.
+	bgPending map[string]bool
 }
 
 type sessionToolCalls struct {
-	cancels map[uint64]context.CancelCauseFunc
+	cancels     map[uint64]context.CancelCauseFunc
+	backgrounds map[uint64]chan struct{}
 }
 
 // register records cancel for a running tool call in sessionID and returns
-// a func that removes it once the call returns.
-func (r *toolCancelRegistry) register(sessionID string, cancel context.CancelCauseFunc) func() {
+// a func that removes it once the call returns. bg, if non-nil, is closed
+// by requestBackground.
+func (r *toolCancelRegistry) register(sessionID string, cancel context.CancelCauseFunc, bg chan struct{}) func() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.bySession == nil {
@@ -41,16 +48,27 @@ func (r *toolCancelRegistry) register(sessionID string, cancel context.CancelCau
 	}
 	calls := r.bySession[sessionID]
 	if calls == nil {
-		calls = &sessionToolCalls{cancels: make(map[uint64]context.CancelCauseFunc)}
+		calls = &sessionToolCalls{
+			cancels:     make(map[uint64]context.CancelCauseFunc),
+			backgrounds: make(map[uint64]chan struct{}),
+		}
 		r.bySession[sessionID] = calls
 	}
 	r.nextID++
 	id := r.nextID
 	calls.cancels[id] = cancel
+	if bg != nil {
+		if r.bgPending[sessionID] {
+			close(bg)
+		} else {
+			calls.backgrounds[id] = bg
+		}
+	}
 	return func() {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		delete(calls.cancels, id)
+		delete(calls.backgrounds, id)
 		if len(calls.cancels) == 0 && r.bySession[sessionID] == calls {
 			delete(r.bySession, sessionID)
 		}
@@ -72,6 +90,38 @@ func (r *toolCancelRegistry) cancel(sessionID string) int {
 		cancel(errToolCanceledByUser)
 	}
 	return len(cancels)
+}
+
+// requestBackground asks every tool call running in sessionID to move
+// itself to the background (tools that support it do so once they have
+// run for tools.BackgroundOnRequestAfter). It reports how many calls were
+// signaled. The request stays pending, signaling calls that start later,
+// until clearBackgroundRequest.
+func (r *toolCancelRegistry) requestBackground(sessionID string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.bgPending == nil {
+		r.bgPending = make(map[string]bool)
+	}
+	r.bgPending[sessionID] = true
+	calls := r.bySession[sessionID]
+	if calls == nil {
+		return 0
+	}
+	n := len(calls.backgrounds)
+	for id, bg := range calls.backgrounds {
+		close(bg)
+		delete(calls.backgrounds, id)
+	}
+	return n
+}
+
+// clearBackgroundRequest drops the pending background request for
+// sessionID, once the aside that asked for it has been folded in.
+func (r *toolCancelRegistry) clearBackgroundRequest(sessionID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.bgPending, sessionID)
 }
 
 // activeTurn describes the turn currently streaming in a session, for
@@ -121,12 +171,12 @@ func (a *sessionAgent) CancelToolCalls(sessionID string) int {
 
 // wrapToolsWithUserCancel makes each tool's execution individually
 // cancelable through registry for sessionID.
-func wrapToolsWithUserCancel(tools []fantasy.AgentTool, registry *toolCancelRegistry, sessionID string) []fantasy.AgentTool {
-	if registry == nil || len(tools) == 0 {
-		return tools
+func wrapToolsWithUserCancel(agentTools []fantasy.AgentTool, registry *toolCancelRegistry, sessionID string) []fantasy.AgentTool {
+	if registry == nil || len(agentTools) == 0 {
+		return agentTools
 	}
-	wrapped := make([]fantasy.AgentTool, len(tools))
-	for i, tool := range tools {
+	wrapped := make([]fantasy.AgentTool, len(agentTools))
+	for i, tool := range agentTools {
 		wrapped[i] = &userCancelableTool{AgentTool: tool, registry: registry, sessionID: sessionID}
 	}
 	return wrapped
@@ -141,7 +191,9 @@ type userCancelableTool struct {
 func (t *userCancelableTool) Run(parentCtx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	ctx, cancel := context.WithCancelCause(parentCtx)
 	defer cancel(nil)
-	unregister := t.registry.register(t.sessionID, cancel)
+	bg := make(chan struct{})
+	ctx = tools.WithBackgroundRequest(ctx, bg)
+	unregister := t.registry.register(t.sessionID, cancel, bg)
 	defer unregister()
 
 	resp, err := t.AgentTool.Run(ctx, call)
