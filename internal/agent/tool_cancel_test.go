@@ -202,3 +202,49 @@ func TestCancelToolCalls_KeepsResultOfToolThatFinished(t *testing.T) {
 	require.False(t, got.resp.IsError)
 	require.Equal(t, "wrote the file", got.resp.Content, "a completed tool's real result is kept")
 }
+
+func TestRequestBackground_SignalsRunningToolCalls(t *testing.T) {
+	t.Parallel()
+
+	var reg toolCancelRegistry
+	require.Zero(t, reg.requestBackground("s"), "nothing running")
+	reg.clearBackgroundRequest("s")
+
+	bg := make(chan struct{})
+	unregister := reg.register("s", func(error) {}, bg)
+	defer unregister()
+
+	require.Equal(t, 1, reg.requestBackground("s"))
+	select {
+	case <-bg:
+	default:
+		t.Fatal("background channel not closed")
+	}
+	require.Zero(t, reg.requestBackground("s"), "a call is signaled only once")
+}
+
+func TestRequestBackground_PendingSignalsLaterCalls(t *testing.T) {
+	t.Parallel()
+
+	var reg toolCancelRegistry
+	reg.requestBackground("s")
+
+	bg := make(chan struct{})
+	unregister := reg.register("s", func(error) {}, bg)
+	select {
+	case <-bg:
+	default:
+		t.Fatal("call started while a request was pending was not signaled")
+	}
+	unregister()
+
+	reg.clearBackgroundRequest("s")
+	bg2 := make(chan struct{})
+	unregister = reg.register("s", func(error) {}, bg2)
+	defer unregister()
+	select {
+	case <-bg2:
+		t.Fatal("signaled after the request was cleared")
+	default:
+	}
+}
