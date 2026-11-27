@@ -16,12 +16,21 @@ func TestSequence(t *testing.T) {
 		in   Report
 		want string
 	}{
-		{"working", Report{State: StateWorking, App: AppCrush, Message: "Installing updates"},
-			"\x1b]7501;state=working:app=crush:msg=" + b64("Installing updates") + "\x07"},
-		{"blocked permission", Report{State: StateBlocked, Kind: KindPermission, App: AppCrush, Message: "Allow bash?"},
-			"\x1b]7501;state=blocked:kind=permission:app=crush:msg=" + b64("Allow bash?") + "\x07"},
-		{"progress", Report{State: StateWorking, ID: "us-east", Progress: &p, Title: "US East", Message: "Pushing image"},
-			"\x1b]7501;state=working:id=us-east:progress=40:title=" + b64("US East") + ":msg=" + b64("Pushing image") + "\x07"},
+		{
+			"working",
+			Report{State: StateWorking, App: AppCrush, Message: "Installing updates"},
+			"\x1b]7501;state=working:app=crush:msg=" + b64("Installing updates") + "\x07",
+		},
+		{
+			"blocked permission",
+			Report{State: StateBlocked, Kind: KindPermission, App: AppCrush, Message: "Allow bash?"},
+			"\x1b]7501;state=blocked:kind=permission:app=crush:msg=" + b64("Allow bash?") + "\x07",
+		},
+		{
+			"progress",
+			Report{State: StateWorking, ID: "us-east", Progress: &p, Title: "US East", Message: "Pushing image"},
+			"\x1b]7501;state=working:id=us-east:progress=40:title=" + b64("US East") + ":msg=" + b64("Pushing image") + "\x07",
+		},
 		{"clear all", Report{State: StateClear}, "\x1b]7501;state=clear\x07"},
 		{"clear id", Report{State: StateClear, ID: "eu-west", App: "x", Message: "y"}, "\x1b]7501;state=clear:id=eu-west\x07"},
 		{"unknown state", Report{State: "busy"}, ""},
@@ -32,8 +41,11 @@ func TestSequence(t *testing.T) {
 		{"kind ignored", Report{State: StateWorking, Kind: KindAuth}, "\x1b]7501;state=working\x07"},
 		{"unknown kind omitted", Report{State: StateBlocked, Kind: "nope"}, "\x1b]7501;state=blocked\x07"},
 		{"bad app omitted", Report{State: StateIdle, App: "my app"}, "\x1b]7501;state=idle\x07"},
-		{"controls stripped", Report{State: StateError, Message: "a\nb\x1b]2;x"},
-			"\x1b]7501;state=error:msg=" + b64("ab]2;x") + "\x07"},
+		{
+			"controls stripped",
+			Report{State: StateError, Message: "a\nb\x1b]2;x"},
+			"\x1b]7501;state=error:msg=" + b64("ab]2;x") + "\x07",
+		},
 		{"only controls", Report{State: StateError, Message: "\n\t"}, "\x1b]7501;state=error\x07"},
 	}
 	for _, tc := range cases {

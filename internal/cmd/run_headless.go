@@ -6,10 +6,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
-
-	"os"
 
 	"github.com/google/uuid"
 	"github.com/taigrr/crush/internal/config"
