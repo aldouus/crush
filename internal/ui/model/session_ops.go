@@ -8,7 +8,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	uv "github.com/charmbracelet/ultraviolet"
-	"github.com/taigrr/crush/internal/version"
 )
 
 // openDialog opens a dialog by its ID.
@@ -80,7 +79,7 @@ func (m *UI) drawSessionDetails(scr uv.Screen, area uv.Rectangle) {
 		blocks...,
 	)
 
-	version := s.CompactDetails.Version.Width(width).AlignHorizontal(lipgloss.Right).Render(version.Version)
+	version := s.CompactDetails.Version.Width(width).AlignHorizontal(lipgloss.Right).Render(m.versionLabel())
 
 	remainingHeight := height - lipgloss.Height(detailsHeader) - lipgloss.Height(version)
 

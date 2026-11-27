@@ -2,6 +2,7 @@ package model
 
 import (
 	"strings"
+	"sync"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/taigrr/crush/internal/agent/notify"
@@ -13,6 +14,9 @@ import (
 )
 
 const programStatusWorking = "Working"
+
+// programStatusParent is the record every session record lives under.
+const programStatusParent = "s"
 
 // programStatusRecord is one session's OSC 7501 record. Every session,
 // including the open one, is a child of "s": the root record is never
@@ -44,6 +48,9 @@ func (r programStatusRecord) same(o programStatusRecord) bool {
 // disappeared are cleared. It returns nil when nothing changed, so a
 // steady frame writes nothing.
 func (m *UI) programStatusCmd() tea.Cmd {
+	if m.quitting {
+		return nil
+	}
 	children := m.programStatusRecords()
 	if m.programStatusInit && sameRecords(children, m.programStatusKids) {
 		return nil
@@ -70,6 +77,18 @@ func (m *UI) programStatusCmd() tea.Cmd {
 	return tea.Raw(b.String())
 }
 
+// programStatusClearCmd removes every record this program wrote. It is
+// used only when the user quits: a SIGHUP or SIGTERM exit leaves records
+// for the terminal to drop on its own. Clearing the parent "s" clears
+// every session record beneath it.
+func (m *UI) programStatusClearCmd() tea.Cmd {
+	if !m.programStatusInit || len(m.programStatusKids) == 0 {
+		return nil
+	}
+	m.programStatusKids = nil
+	return tea.Raw(termstatus.Report{State: termstatus.StateClear, ID: programStatusParent}.Sequence())
+}
+
 func sameRecords(a, b map[string]programStatusRecord) bool {
 	if len(a) != len(b) {
 		return false
@@ -89,7 +108,7 @@ func (m *UI) programStatusRecords() map[string]programStatusRecord {
 	if m.hasSession() {
 		open = m.session.ID
 	}
-	children := map[string]programStatusRecord{}
+	children := make(map[string]programStatusRecord, len(m.programStatusKids)+1)
 	if m.leftSidebar != nil {
 		for _, ws := range m.leftSidebar.Overviews() {
 			for _, sess := range ws.Sessions {
@@ -176,8 +195,17 @@ func recordID(sessionID string) string {
 	if sessionID == "" {
 		return ""
 	}
-	return "s/" + session.HashID(sessionID)
+	if id, ok := recordIDs.Load(sessionID); ok {
+		return id.(string)
+	}
+	id := programStatusParent + "/" + session.HashID(sessionID)
+	recordIDs.Store(sessionID, id)
+	return id
 }
+
+// recordIDs memoizes [recordID]. Records are rebuilt on every Update,
+// and hashing every session each time dominated the cost.
+var recordIDs sync.Map
 
 // sessionOutcome is the last terminal result of a session, kept so a
 // finished or failed turn stays reported until the next one starts.

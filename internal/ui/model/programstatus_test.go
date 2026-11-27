@@ -112,3 +112,21 @@ func TestRecordIDStable(t *testing.T) {
 	require.NotEmpty(t, termstatus.Report{State: termstatus.StateIdle, ID: a}.Sequence())
 	require.Empty(t, recordID(""))
 }
+
+func TestProgramStatusClearedOnQuit(t *testing.T) {
+	t.Parallel()
+	u := newTestUI()
+	u.com.Workspace = &sendWorkspace{readiness: func(context.Context) (bool, error) { return false, nil }}
+	u.session = &session.Session{ID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Title: "Open"}
+	require.NotNil(t, u.programStatusCmd())
+
+	u.quitting = true
+	require.Equal(t, "\x1b]7501;state=clear:id=s\x07", rawOf(t, u.programStatusClearCmd()))
+	require.Nil(t, u.programStatusCmd(), "nothing is reported again after quitting")
+	require.Nil(t, u.programStatusClearCmd(), "cleared once")
+}
+
+func TestProgramStatusClearNothingWritten(t *testing.T) {
+	t.Parallel()
+	require.Nil(t, newTestUI().programStatusClearCmd())
+}

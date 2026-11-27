@@ -6,12 +6,13 @@ import (
 	"github.com/taigrr/crush/internal/ui/logo"
 	"github.com/taigrr/crush/internal/ui/styles"
 	"github.com/taigrr/crush/internal/ui/styles/themes"
-	"github.com/taigrr/crush/internal/version"
 )
 
 // cacheSidebarLogo renders and caches the sidebar logo at the specified width.
 func (m *UI) cacheSidebarLogo(width int) {
-	m.sidebarLogo = renderLogo(m.com.Styles, true, m.com.IsHyper(), width)
+	m.sidebarLogoLabel = m.versionLabel()
+	m.sidebarLogoWidth = width
+	m.sidebarLogo = renderLogo(m.com.Styles, m.sidebarLogoLabel, true, m.com.IsHyper(), width)
 }
 
 // applyTheme replaces the active styles with the given theme, drops the
@@ -61,8 +62,8 @@ func (m *UI) refreshStyles() {
 }
 
 // renderLogo renders the Crush logo with the given styles and dimensions.
-func renderLogo(t *styles.Styles, compact, hyper bool, width int) string {
-	return logo.Render(t.Logo.GradCanvas, version.Version, compact, logo.Opts{
+func renderLogo(t *styles.Styles, ver string, compact, hyper bool, width int) string {
+	return logo.Render(t.Logo.GradCanvas, ver, compact, logo.Opts{
 		FieldColor:   t.Logo.FieldColor,
 		TitleColorA:  t.Logo.TitleColorA,
 		TitleColorB:  t.Logo.TitleColorB,

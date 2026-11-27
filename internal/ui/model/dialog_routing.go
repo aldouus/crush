@@ -384,7 +384,12 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 	case dialog.ActionQuit:
 		// QuitMsg returns from the event loop before the next render.
 		m.quitting = true
-		cmds = append(cmds, tea.Tick(0, func(time.Time) tea.Msg { return tea.QuitMsg{} }))
+		// Status records are cleared before QuitMsg so the sequence is
+		// written while the program still owns the terminal.
+		cmds = append(cmds, tea.Sequence(
+			m.programStatusClearCmd(),
+			tea.Tick(0, func(time.Time) tea.Msg { return tea.QuitMsg{} }),
+		))
 	case dialog.ActionEnableDockerMCP:
 		m.dialog.CloseDialog(dialog.CommandsID)
 		cmds = append(cmds, m.enableDockerMCP)

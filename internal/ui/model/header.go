@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/taigrr/crush/internal/version"
+
 	"charm.land/lipgloss/v2"
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
@@ -77,7 +79,7 @@ func (h *header) drawHeader(
 ) {
 	t := h.com.Styles
 	if width != h.width || compact != h.compact {
-		h.logo = renderLogo(h.com.Styles, compact, h.com.IsHyper(), width)
+		h.logo = renderLogo(h.com.Styles, version.Version, compact, h.com.IsHyper(), width)
 	}
 
 	h.width = width

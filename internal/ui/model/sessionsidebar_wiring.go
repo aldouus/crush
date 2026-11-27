@@ -73,6 +73,18 @@ func (m *UI) loadWorkspaceOverviews() tea.Cmd {
 	}
 }
 
+// refreshNavigatorAfterRun reloads the session navigator after a run
+// finishes. It skips while the navigator is focused: a rebuild reorders
+// rows (busy/unread/recent) and would move the cursor out from under the
+// user mid-navigation, causing enter to act on the wrong session. Live
+// markers refresh on next open.
+func (m *UI) refreshNavigatorAfterRun() tea.Cmd {
+	if !m.leftSidebarVisible || m.focus == uiFocusLeftSidebar {
+		return nil
+	}
+	return m.loadWorkspaceOverviews()
+}
+
 // prefetchWorkspaceOverviews starts the overview fetch right away instead of
 // when Bubble Tea gets around to running Init commands, which happens only
 // after the first frames and terminal queries are processed. The returned
