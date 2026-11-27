@@ -89,7 +89,7 @@ func Run(ctx context.Context, opts RunOptions) (err error) {
 // Crush handler stack. Shared by the stateless [Run] entrypoint and the
 // stateful [Shell] so the two surfaces cannot drift.
 func newRunner(cwd string, env []string, stdin io.Reader, stdout, stderr io.Writer, blockFuncs []BlockFunc) (*interp.Runner, error) {
-	env = withNonInteractiveEnv(env)
+	env = withNonInteractiveEnv(WithoutProgramResumeToken(env))
 	return interp.New(
 		interp.StdIO(stdin, stdout, stderr),
 		interp.Interactive(false),

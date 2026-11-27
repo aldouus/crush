@@ -37,6 +37,7 @@ import (
 	"github.com/taigrr/crush/internal/proto"
 	"github.com/taigrr/crush/internal/server"
 	"github.com/taigrr/crush/internal/session"
+	"github.com/taigrr/crush/internal/shell"
 	"github.com/taigrr/crush/internal/startuptrace"
 	"github.com/taigrr/crush/internal/ui/anim"
 	"github.com/taigrr/crush/internal/ui/common"
@@ -141,7 +142,7 @@ crush skill print
 		// package before any model is built; per-message anims pick it
 		// up via Settings inheritance.
 		anim.SetDefaultLowBandwidth(com.Config().LowBandwidthEnabled())
-		model := ui.New(com, sessionID, continueLast)
+		model := ui.New(com, sessionID, continueLast, resumeCommand(cmd))
 
 		var env uv.Environ = os.Environ()
 		opts := []tea.ProgramOption{
@@ -330,7 +331,7 @@ func connectToServerAt(cmd *cobra.Command, cwd string, opts ...func(*proto.Works
 		Debug:   debug,
 		YOLO:    yolo,
 		Version: version.Version,
-		Env:     os.Environ(),
+		Env:     shell.WithoutProgramResumeToken(os.Environ()),
 	}
 	for _, opt := range opts {
 		opt(&wsReq)
@@ -720,6 +721,41 @@ func restartPersistentDaemon(cmd *cobra.Command, c *client.Client, vi *proto.Ver
 
 var safeNameRegexp = regexp.MustCompile(`[^a-zA-Z0-9._-]`)
 
+// resumeCommand is how a terminal restarts this crush, without the session.
+func resumeCommand(cmd *cobra.Command) ui.ResumeCommand {
+	exe, err := os.Executable()
+	if err != nil {
+		return ui.ResumeCommand{}
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	dir, err := os.Getwd()
+	if err != nil || !filepath.IsAbs(dir) {
+		return ui.ResumeCommand{}
+	}
+
+	args := []string{exe}
+	if cmd.Flags().Changed("debug") {
+		args = append(args, "--debug")
+	}
+	if cmd.Flags().Changed("yolo") {
+		args = append(args, "--yolo")
+	}
+	if cmd.Flags().Changed("data-dir") {
+		dataDir, _ := cmd.Flags().GetString("data-dir")
+		abs, err := filepath.Abs(dataDir)
+		if err != nil {
+			return ui.ResumeCommand{}
+		}
+		args = append(args, "--data-dir", abs)
+	}
+	if cmd.Flags().Changed("host") {
+		args = append(args, "--host", clientHost)
+	}
+	return ui.ResumeCommand{Args: args, Dir: dir}
+}
+
 func startDetachedServer(hostURL *url.URL) error {
 	exe, err := os.Executable()
 	if err != nil {
@@ -741,7 +777,7 @@ func startDetachedServer(hostURL *url.URL) error {
 	// DETACHED_PROCESS on windows) is what truly detaches the child from
 	// this process's lifetime.
 	c := exec.CommandContext(context.Background(), exe, cmdArgs...)
-	c.Env = append(os.Environ(), "CRUSH_PROFILE_PORT=6061")
+	c.Env = append(shell.WithoutProgramResumeToken(os.Environ()), "CRUSH_PROFILE_PORT=6061")
 	stdoutPath := filepath.Join(chDir, "stdout.log")
 	stderrPath := filepath.Join(chDir, "stderr.log")
 	detachProcess(c)

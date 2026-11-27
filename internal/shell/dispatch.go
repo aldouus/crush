@@ -445,5 +445,5 @@ func execEnvList(env expand.Environ) []string {
 		}
 		return true
 	})
-	return out
+	return WithoutProgramResumeToken(out)
 }

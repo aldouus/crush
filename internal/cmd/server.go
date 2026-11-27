@@ -98,6 +98,8 @@ var serverCmd = &cobra.Command{
 
 		logFile := filepath.Join(config.GlobalCacheDir(), "server-"+safeHostName(hostURL), "crush.log")
 
+		ignoreTerminalHangup()
+
 		if term.IsTerminal(os.Stderr.Fd()) {
 			crushlog.Setup(logFile, debug, os.Stderr)
 		} else {

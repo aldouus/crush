@@ -4,25 +4,25 @@ go 1.27.3
 
 require (
 	charm.land/bubbles/v2 v2.2.1
-	charm.land/bubbletea/v2 v2.1.2
+	charm.land/bubbletea/v2 v2.2.0
 	charm.land/fang/v2 v2.0.1
 	charm.land/glamour/v2 v2.0.1
-	charm.land/lipgloss/v2 v2.1.1
+	charm.land/lipgloss/v2 v2.1.0
 	charm.land/log/v2 v2.0.1
 	github.com/JohannesKaufmann/html-to-markdown v1.6.0
 	github.com/MakeNowJust/heredoc v1.0.0
 	github.com/Microsoft/go-winio v0.6.4
-	github.com/PuerkitoBio/goquery v1.14.0
+	github.com/PuerkitoBio/goquery v1.13.0
 	github.com/alecthomas/chroma/v2 v2.27.0
 	github.com/atotto/clipboard v0.1.4
 	github.com/aymanbagabas/go-nativeclipboard v0.1.3
-	github.com/aymanbagabas/go-udiff v0.4.2
+	github.com/aymanbagabas/go-udiff v0.4.1
 	github.com/bmatcuk/doublestar/v4 v4.10.4
 	github.com/charlievieth/fastwalk v1.0.14
 	github.com/charmbracelet/colorprofile v0.4.3
 	github.com/charmbracelet/openai-go v0.0.0-20260921175203-216db9e71b83
 	github.com/charmbracelet/ultraviolet v0.0.0-20261023060817-a45b7c86333f
-	github.com/charmbracelet/x/ansi v0.11.10
+	github.com/charmbracelet/x/ansi v0.12.0
 	github.com/charmbracelet/x/editor v0.2.0
 	github.com/charmbracelet/x/exp/charmtone v0.1.1
 	github.com/charmbracelet/x/exp/golden v0.1.0
@@ -35,7 +35,7 @@ require (
 	github.com/clipperhouse/uax29/v2 v2.7.0
 	github.com/disintegration/imaging v1.6.2
 	github.com/dustin/go-humanize v1.1.0
-	github.com/gen2brain/beeep v0.12.0
+	github.com/gen2brain/beeep v0.11.3
 	github.com/go-git/go-billy/v5 v5.9.2
 	github.com/go-git/go-git/v5 v5.19.3
 	github.com/google/uuid v1.6.0
@@ -44,13 +44,13 @@ require (
 	github.com/itchyny/gojq v0.12.20
 	github.com/joho/godotenv v1.5.1
 	github.com/jordanella/go-ansi-paintbrush v0.0.0-20240728195301-b7ad996ecf3d
-	github.com/klauspost/compress v1.20.5
+	github.com/klauspost/compress v1.20.4
 	github.com/lucasb-eyer/go-colorful v1.4.1
 	github.com/mattn/go-isatty v0.0.24
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/nats-io/jwt/v2 v2.8.3
 	github.com/nats-io/nats-server/v2 v2.15.3
-	github.com/nats-io/nats.go v1.56.0
+	github.com/nats-io/nats.go v1.55.0
 	github.com/nats-io/nkeys v0.4.17
 	github.com/ncruces/go-sqlite3 v0.37.0
 	github.com/neovim/go-client v1.2.1
@@ -70,14 +70,14 @@ require (
 	github.com/taigrr/colorhash v0.8.0
 	github.com/taigrr/fantasy v0.31.1-fork
 	github.com/taigrr/simplecolorpalettes v0.10.1
-	github.com/tidwall/gjson v1.20.5
-	github.com/tidwall/sjson v1.2.11
+	github.com/tidwall/gjson v1.20.2
+	github.com/tidwall/sjson v1.2.9
 	github.com/yuin/gopher-lua v1.1.2
 	github.com/zeebo/xxh3 v1.1.0
 	go.uber.org/goleak v1.3.0
 	golang.org/x/image v0.48.0
 	golang.org/x/mod v0.43.0
-	golang.org/x/net v0.63.0
+	golang.org/x/net v0.62.0
 	golang.org/x/oauth2 v0.38.0
 	golang.org/x/sync v0.25.0
 	golang.org/x/sys v0.50.0
@@ -166,6 +166,7 @@ require (
 	github.com/hajimehoshi/go-mp3 v0.3.4 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/itchyny/timefmt-go v0.1.9 // indirect
+	github.com/jackmordaunt/icns/v3 v3.0.1 // indirect
 	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect
 	github.com/jfreymuth/pulse v0.1.3 // indirect
 	github.com/kaptinlin/jsonpointer v0.4.28 // indirect
@@ -188,6 +189,7 @@ require (
 	github.com/ncruces/go-sqlite3-wasm/v6 v6.5.35401 // indirect
 	github.com/ncruces/go-strftime v1.1.0 // indirect
 	github.com/ncruces/julianday v1.0.0 // indirect
+	github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646 // indirect
 	github.com/pb33f/go-yaml v0.1.1 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.2 // indirect
 	github.com/pierrec/lz4/v4 v4.1.33 // indirect
@@ -226,9 +228,9 @@ require (
 	go.opentelemetry.io/otel/trace v1.47.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.6 // indirect
-	golang.org/x/crypto v0.59.0 // indirect
+	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/exp v0.0.0-20261109185158-a52e3aef5920 // indirect
-	golang.org/x/term v0.48.0 // indirect
+	golang.org/x/term v0.47.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
 	golang.org/x/tools v0.52.1-0.20261106145633-d407941a339a // indirect
 	google.golang.org/api v0.310.0 // indirect

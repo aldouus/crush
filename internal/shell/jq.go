@@ -137,7 +137,7 @@ func handleJQ(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 	}
 
 	opts := []gojq.CompilerOption{
-		gojq.WithEnvironLoader(os.Environ),
+		gojq.WithEnvironLoader(func() []string { return WithoutProgramResumeToken(os.Environ()) }),
 	}
 	if len(argNames) > 0 {
 		opts = append(opts, gojq.WithVariables(argNames))

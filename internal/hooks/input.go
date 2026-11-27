@@ -90,7 +90,7 @@ func BuildStopPayload(sessionID, cwd string, in StopInput) []byte {
 // command. It mirrors [BuildEnv] but exposes turn context instead of
 // tool context.
 func BuildStopEnv(sessionID, cwd, projectDir string, in StopInput) []string {
-	env := os.Environ()
+	env := shell.WithoutProgramResumeToken(os.Environ())
 	env = append(env, shell.CrushEnvMarkers()...)
 	env = append(
 		env,
@@ -107,7 +107,7 @@ func BuildStopEnv(sessionID, cwd, projectDir string, in StopInput) []string {
 // BuildEnv constructs the environment variable slice for a hook command.
 // It includes all current process env vars plus hook-specific ones.
 func BuildEnv(eventName, toolName, sessionID, cwd, projectDir, toolInputJSON string) []string {
-	env := os.Environ()
+	env := shell.WithoutProgramResumeToken(os.Environ())
 	env = append(env, shell.CrushEnvMarkers()...)
 	env = append(
 		env,

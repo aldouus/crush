@@ -29,8 +29,9 @@ import (
 // ActionClose is a message to close the current dialog.
 type ActionClose struct{}
 
-// ActionQuit is a message to quit the application.
-type ActionQuit = tea.QuitMsg
+// ActionQuit asks the application to quit. It is not a tea.QuitMsg, which
+// the event loop returns on before the next render.
+type ActionQuit struct{}
 
 // ActionOpenDialog is a message to open a dialog.
 type ActionOpenDialog struct {

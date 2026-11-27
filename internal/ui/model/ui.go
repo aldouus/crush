@@ -221,6 +221,15 @@ type UI struct {
 	// continueLastSession is set to continue the most recent session on startup.
 	continueLastSession bool
 
+	// resume is the command that restarts this crush, minus the session.
+	resume struct {
+		args []string
+		dir  string
+	}
+
+	// quitting makes the last view clear the program-resume record.
+	quitting bool
+
 	lastUserMessageTime int64
 
 	// The width and height of the terminal in cells.
@@ -470,8 +479,15 @@ type UI struct {
 	searchGen int
 }
 
+// ResumeCommand is the command a terminal runs to bring crush back after
+// it restarts, without the session, which the UI appends itself.
+type ResumeCommand struct {
+	Args []string
+	Dir  string
+}
+
 // New creates a new instance of the [UI] model.
-func New(com *common.Common, initialSessionID string, continueLast bool) *UI {
+func New(com *common.Common, initialSessionID string, continueLast bool, resume ResumeCommand) *UI {
 	// Editor components
 	ta := textarea.New()
 	ta.SetStyles(com.Styles.Editor.Textarea)
@@ -536,9 +552,13 @@ func New(com *common.Common, initialSessionID string, continueLast bool) *UI {
 		hasDarkBackground:   true,
 		initialSessionID:    initialSessionID,
 		continueLastSession: continueLast,
-		pendingPermissions:  make(map[string]*permission.PermissionRequest),
-		pendingQuestions:    make(map[string]*question.Request),
-		attentionPending:    make(map[string]bool),
+		resume: struct {
+			args []string
+			dir  string
+		}{resume.Args, resume.Dir},
+		pendingPermissions: make(map[string]*permission.PermissionRequest),
+		pendingQuestions:   make(map[string]*question.Request),
+		attentionPending:   make(map[string]bool),
 	}
 
 	status := NewStatus(com, ui)

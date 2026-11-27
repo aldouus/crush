@@ -27,6 +27,7 @@ import (
 	"github.com/taigrr/crush/internal/proto"
 	"github.com/taigrr/crush/internal/pubsub"
 	"github.com/taigrr/crush/internal/registry"
+	"github.com/taigrr/crush/internal/shell"
 	"github.com/taigrr/crush/internal/skills"
 	"github.com/taigrr/crush/internal/sound"
 	"github.com/taigrr/crush/internal/startuptrace"
@@ -458,7 +459,7 @@ func (b *Backend) CreateWorkspace(args proto.Workspace) (*Workspace, proto.Works
 	if !args.Isolated {
 		b.pathIndex[key] = id
 	}
-	b.registerClient(ws, clientID, args.Env, args.Path)
+	b.registerClient(ws, clientID, shell.WithoutProgramResumeToken(args.Env), args.Path)
 	b.mu.Unlock()
 
 	// Start the cross-workspace attention forwarder for this workspace.
@@ -588,7 +589,7 @@ func (b *Backend) buildWorkspace(args proto.Workspace, key, effectiveCwd string)
 		ID:           uuid.New().String(),
 		Path:         key,
 		Cfg:          cfg,
-		Env:          args.Env,
+		Env:          shell.WithoutProgramResumeToken(args.Env),
 		Skills:       skillsMgr,
 		resolvedPath: key,
 		ctx:          wsCtx,
@@ -616,7 +617,7 @@ func (b *Backend) buildWorkspace(args proto.Workspace, key, effectiveCwd string)
 func (b *Backend) adoptExistingWorkspace(existing, loser *Workspace, clientID string, args proto.Workspace, effectiveCwd, key string) (*Workspace, proto.Workspace, error) {
 	defer startuptrace.Span("srv.adopt_existing")()
 	logFirstWinsMismatch(existing, args)
-	b.registerClient(existing, clientID, args.Env, args.Path)
+	b.registerClient(existing, clientID, shell.WithoutProgramResumeToken(args.Env), args.Path)
 	b.mu.Unlock()
 	if loser != nil {
 		loser.invokeShutdown()
@@ -1322,10 +1323,11 @@ func skillStatesToProto(states []*skills.SkillState) []proto.SkillState {
 func logFirstWinsMismatch(existing *Workspace, args proto.Workspace) {
 	existingCfg := existing.Cfg.Config()
 	existingYOLO := existing.Cfg.Overrides().SkipPermissionRequests
+	requestedEnv := shell.WithoutProgramResumeToken(args.Env)
 	if existingYOLO == args.YOLO &&
 		existingCfg.Options.Debug == args.Debug &&
 		existingCfg.Options.DataDirectory == args.DataDir &&
-		stringSlicesEqual(existing.Env, args.Env) {
+		stringSlicesEqual(existing.Env, requestedEnv) {
 		return
 	}
 	slog.Debug(
@@ -1339,7 +1341,7 @@ func logFirstWinsMismatch(existing *Workspace, args proto.Workspace) {
 		"existing_data_dir", existingCfg.Options.DataDirectory,
 		"requested_data_dir", args.DataDir,
 		"existing_env", existing.Env,
-		"requested_env", args.Env,
+		"requested_env", requestedEnv,
 	)
 }
 

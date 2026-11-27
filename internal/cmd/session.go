@@ -30,6 +30,7 @@ import (
 	"github.com/taigrr/crush/internal/projects"
 	"github.com/taigrr/crush/internal/session"
 	"github.com/taigrr/crush/internal/sessionimport"
+	"github.com/taigrr/crush/internal/shell"
 	"github.com/taigrr/crush/internal/ui/chat"
 	"github.com/taigrr/crush/internal/ui/styles/themes"
 )
@@ -766,6 +767,7 @@ func sessionWriter(ctx context.Context, contentHeight int) (io.Writer, func(), b
 	cmd := exec.CommandContext(ctx, parts[0], parts[1:]...) //nolint:gosec
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	cmd.Env = shell.WithoutProgramResumeToken(os.Environ())
 
 	pipe, err := cmd.StdinPipe()
 	if err != nil {
