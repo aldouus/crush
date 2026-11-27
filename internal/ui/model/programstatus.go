@@ -2,6 +2,7 @@ package model
 
 import (
 	"strings"
+	"sync"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/taigrr/crush/internal/agent/notify"
@@ -107,7 +108,7 @@ func (m *UI) programStatusRecords() map[string]programStatusRecord {
 	if m.hasSession() {
 		open = m.session.ID
 	}
-	children := map[string]programStatusRecord{}
+	children := make(map[string]programStatusRecord, len(m.programStatusKids)+1)
 	if m.leftSidebar != nil {
 		for _, ws := range m.leftSidebar.Overviews() {
 			for _, sess := range ws.Sessions {
@@ -194,8 +195,17 @@ func recordID(sessionID string) string {
 	if sessionID == "" {
 		return ""
 	}
-	return programStatusParent + "/" + session.HashID(sessionID)
+	if id, ok := recordIDs.Load(sessionID); ok {
+		return id.(string)
+	}
+	id := programStatusParent + "/" + session.HashID(sessionID)
+	recordIDs.Store(sessionID, id)
+	return id
 }
+
+// recordIDs memoizes [recordID]. Records are rebuilt on every Update,
+// and hashing every session each time dominated the cost.
+var recordIDs sync.Map
 
 // sessionOutcome is the last terminal result of a session, kept so a
 // finished or failed turn stays reported until the next one starts.
