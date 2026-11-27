@@ -143,6 +143,8 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cmd := m.handleAgentNotification(msg.Payload); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+	case pubsub.Event[notify.RunComplete]:
+		m.noteRunComplete(msg.Payload)
 		// A run finished somewhere: refresh the session navigator so its
 		// busy/unread markers stay current. Skip while it is focused: a
 		// rebuild reorders rows (busy/unread/recent) and would move the
@@ -881,6 +883,9 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// This logic gets triggered on any message type, but should it?
+	if cmd := m.programStatusCmd(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
 	prevPlaceholder := m.textarea.Placeholder
 	switch m.focus {
 	case uiFocusMain:

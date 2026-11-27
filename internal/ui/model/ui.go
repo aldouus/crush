@@ -205,6 +205,14 @@ type UI struct {
 	// sessions in workspaces this client is not currently focused on.
 	attentionPending map[string]bool
 
+	// sessionOutcome remembers the last finished or failed turn per
+	// session. It is dropped once that session is busy again.
+	sessionOutcome map[string]sessionOutcome
+	// programStatusKids are the records last written, keyed by their OSC
+	// id, so an unchanged frame emits nothing.
+	programStatusKids map[string]programStatusRecord
+	programStatusInit bool
+
 	// keeps track of read files while we don't have a session id
 	sessionFileReads []string
 

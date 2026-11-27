@@ -26,7 +26,7 @@ func e2eRun(t *testing.T, h *headlesstest.Harness, sess *proto.Session, opts run
 		opts.mode = headless.ModeYOLO
 	}
 	opts.prompt = "please do the thing"
-	err := runHeadless(t.Context(), h.Client, h.Workspace, sess, opts, &out)
+	err := runHeadless(t.Context(), h.Client, h.Workspace, sess, opts, &out, false)
 	lines := decodeLines(t, &out)
 	require.NotEmpty(t, lines)
 	return lines[len(lines)-1], err
