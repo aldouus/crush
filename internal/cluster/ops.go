@@ -193,13 +193,17 @@ func (n *Node) Approve(ctx context.Context, ref string) (Member, error) {
 		}
 		st.upsertMember(m)
 		st.Pending = slices.DeleteFunc(st.Pending, func(p JoinRequest) bool { return p.NodeID == req.NodeID })
+		// A node that left and is approved again is a member once more.
+		st.Departed = slices.DeleteFunc(st.Departed, func(d Departure) bool { return d.NodeID == req.NodeID })
 		return nil
 	})
 	if err != nil {
 		return Member{}, err
 	}
 	slog.Info("Cluster join approved", "node", m.Name, "node_id", m.NodeID)
-	n.broadcast(ctx, "/cluster/v1/members", membersBody{Members: []Member{m}}, m.NodeID)
+	// Members that miss the announcement are retried for a while, and
+	// otherwise learn the new member through gossip.
+	n.broadcastRetry(ctx, "/cluster/v1/members", membersBody{Members: []Member{m}}, m.NodeID)
 	return m, nil
 }
 
@@ -284,19 +288,67 @@ func (n *Node) Ping(ctx context.Context, m Member) (NodeInfo, time.Duration, err
 // broadcast POSTs body to every other member except skipID, returning
 // per-member errors.
 func (n *Node) broadcast(ctx context.Context, path string, body any, skipID string) []error {
-	var errs []error
-	for _, m := range n.otherMembers() {
-		if m.NodeID == skipID {
-			continue
-		}
-		cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	_, errs := n.broadcastTo(ctx, n.broadcastTargets(skipID), path, body)
+	return errs
+}
+
+func (n *Node) broadcastTargets(skipID string) []Member {
+	return slices.DeleteFunc(n.otherMembers(), func(m Member) bool { return m.NodeID == skipID })
+}
+
+// broadcastTo POSTs body to members, returning those that failed and
+// their errors.
+func (n *Node) broadcastTo(ctx context.Context, members []Member, path string, body any) ([]Member, []error) {
+	var (
+		failed []Member
+		errs   []error
+	)
+	for _, m := range members {
+		cctx, cancel := context.WithTimeout(ctx, broadcastTimeout)
 		err := n.callMember(cctx, m, http.MethodPost, path, body, nil)
 		cancel()
 		if err != nil {
 			slog.Warn("Cluster broadcast failed", "path", path, "member", m.Name, "error", err)
+			failed = append(failed, m)
 			errs = append(errs, err)
 		}
 	}
+	return failed, errs
+}
+
+// broadcastRetry is [Node.broadcast] that keeps retrying members that
+// failed, with backoff, in the background for up to broadcastRetryFor
+// (or until the listener stops). Members that are no longer members are
+// dropped from the retry.
+func (n *Node) broadcastRetry(ctx context.Context, path string, body any, skipID string) []error {
+	failed, errs := n.broadcastTo(ctx, n.broadcastTargets(skipID), path, body)
+	window := n.broadcastRetryFor
+	if len(failed) == 0 || window <= 0 {
+		return errs
+	}
+	life := n.lifetime()
+	go func() {
+		rctx, cancel := context.WithTimeout(life, window)
+		defer cancel()
+		backoff := broadcastRetryMin
+		for len(failed) > 0 {
+			select {
+			case <-rctx.Done():
+				slog.Warn("Cluster broadcast gave up; gossip will converge", "path", path, "members", len(failed))
+				return
+			case <-time.After(backoff):
+			}
+			backoff = min(backoff*2, broadcastRetryMax)
+			current := n.otherMembers()
+			var retry []Member
+			for _, m := range failed {
+				if i := slices.IndexFunc(current, func(c Member) bool { return c.NodeID == m.NodeID }); i >= 0 {
+					retry = append(retry, current[i])
+				}
+			}
+			failed, _ = n.broadcastTo(rctx, retry, path, body)
+		}
+	}()
 	return errs
 }
 
