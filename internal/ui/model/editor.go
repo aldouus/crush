@@ -9,6 +9,7 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/editor"
+	"github.com/taigrr/crush/internal/shell"
 	"github.com/taigrr/crush/internal/ui/util"
 )
 
@@ -33,6 +34,7 @@ func (m *UI) openEditor(value string) tea.Cmd {
 	if err != nil {
 		return util.ReportError(err)
 	}
+	cmd.Env = shell.WithoutProgramResumeToken(os.Environ())
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
 		defer func() {
 			_ = os.Remove(tmpPath)

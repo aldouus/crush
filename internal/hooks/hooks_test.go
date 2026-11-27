@@ -201,6 +201,7 @@ func TestBuildEnv(t *testing.T) {
 	require.Equal(t, "1", envMap["CRUSH"])
 	require.Equal(t, "crush", envMap["AGENT"])
 	require.Equal(t, "crush", envMap["AI_AGENT"])
+	require.NotContains(t, envMap, "OSC7577_TOKEN")
 }
 
 func splitFirst(s, sep string) []string {

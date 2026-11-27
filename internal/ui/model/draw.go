@@ -175,6 +175,7 @@ func (m *UI) View() tea.View {
 	v.MouseMode = tea.MouseModeCellMotion
 	v.ReportFocus = m.caps.ReportFocusEvents
 	v.WindowTitle = "crush " + home.Short(m.com.Workspace.WorkingDir())
+	v.ProgramResume = m.programResume()
 
 	key, cacheable := m.currentFrameKey()
 	if m.versionMismatch {

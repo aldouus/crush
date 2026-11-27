@@ -9,7 +9,7 @@ import (
 )
 
 func TestDaemonEnvSnapshot(t *testing.T) {
-	env := snapshotEnv([]string{"AWS_PROFILE=dev", "PWD=/x", "TMUX=/tmp/t", "TERM_PROGRAM=ghostty", "PATH=/bin", "EMPTY=", "BAD"})
+	env := snapshotEnv([]string{"AWS_PROFILE=dev", "PWD=/x", "TMUX=/tmp/t", "TERM_PROGRAM=ghostty", "PATH=/bin", "EMPTY=", "BAD", "OSC7577_TOKEN=secret"})
 	require.Equal(t, map[string]string{"AWS_PROFILE": "dev", "PATH": "/bin", "EMPTY": ""}, env)
 
 	path := filepath.Join(t.TempDir(), "env.json")

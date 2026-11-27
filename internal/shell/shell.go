@@ -20,10 +20,25 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/exp/slice"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
 )
+
+const programResumeTokenPrefix = ansi.ProgramResumeTokenEnv + "="
+
+// WithoutProgramResumeToken returns a copy of env without OSC7577_TOKEN.
+func WithoutProgramResumeToken(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if strings.HasPrefix(kv, programResumeTokenPrefix) {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
 
 // ShellType represents the type of shell to use
 type ShellType int
@@ -93,6 +108,7 @@ func NewShell(opts *Options) *Shell {
 	if env == nil {
 		env = os.Environ()
 	}
+	env = WithoutProgramResumeToken(env)
 
 	// Allow tools to detect execution by Crush.
 	env = append(env, CrushEnvMarkers()...)
@@ -248,6 +264,8 @@ func (s *Shell) updateShellFromRunner(runner *interp.Runner) {
 			s.env = append(s.env, name+"="+vr.Str)
 		}
 	}
+	// The interpreter re-exports the process environment, token included.
+	s.env = WithoutProgramResumeToken(s.env)
 }
 
 // execCommon is the shared implementation for executing commands

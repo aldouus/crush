@@ -26,6 +26,7 @@ import (
 	mcpoauth "github.com/taigrr/crush/internal/oauth/mcp"
 	"github.com/taigrr/crush/internal/permission"
 	"github.com/taigrr/crush/internal/pubsub"
+	"github.com/taigrr/crush/internal/shell"
 	"github.com/taigrr/crush/internal/version"
 	"golang.org/x/oauth2"
 )
@@ -752,7 +753,7 @@ func createTransport(ctx context.Context, cfg *config.ConfigStore, name string, 
 			return nil, nil, err
 		}
 		cmd := exec.CommandContext(ctx, home.Long(command), args...)
-		cmd.Env = append(os.Environ(), envs...)
+		cmd.Env = append(shell.WithoutProgramResumeToken(os.Environ()), envs...)
 		// Run the child in its own process group and kill the whole group when
 		// the session context is cancelled. A stdio server often spawns its own
 		// children (signal-mcp launches signal-cli); os/exec's default

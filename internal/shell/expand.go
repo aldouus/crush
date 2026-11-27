@@ -74,6 +74,7 @@ func ExpandValue(ctx context.Context, value string, env []string) (string, error
 	// ExpandValue control the env, and nounset must treat any name
 	// not in env as unset.
 	cwd, _ := os.Getwd()
+	env = WithoutProgramResumeToken(env)
 	s := &Shell{
 		cwd:    cwd,
 		env:    env,

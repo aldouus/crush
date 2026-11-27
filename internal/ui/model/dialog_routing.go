@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	fimage "github.com/taigrr/crush/internal/ui/image"
 	"github.com/taigrr/crush/internal/workspace"
@@ -381,7 +382,9 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 		})
 		m.dialog.CloseDialog(dialog.CommandsID)
 	case dialog.ActionQuit:
-		cmds = append(cmds, tea.Quit)
+		// QuitMsg returns from the event loop before the next render.
+		m.quitting = true
+		cmds = append(cmds, tea.Tick(0, func(time.Time) tea.Msg { return tea.QuitMsg{} }))
 	case dialog.ActionEnableDockerMCP:
 		m.dialog.CloseDialog(dialog.CommandsID)
 		cmds = append(cmds, m.enableDockerMCP)

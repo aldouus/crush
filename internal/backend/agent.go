@@ -532,7 +532,7 @@ func (b *Backend) RunShellCommand(ctx context.Context, workspaceID string, req p
 	runErr := shell.Run(ctx, shell.RunOptions{
 		Command: req.Command,
 		Cwd:     cwd,
-		Env:     append(os.Environ(), ws.Env...),
+		Env:     append(shell.WithoutProgramResumeToken(os.Environ()), shell.WithoutProgramResumeToken(ws.Env)...),
 		Stdout:  &stdout,
 		Stderr:  &stderr,
 	})

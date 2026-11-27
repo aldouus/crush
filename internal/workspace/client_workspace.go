@@ -31,6 +31,7 @@ import (
 	"github.com/taigrr/crush/internal/question"
 	"github.com/taigrr/crush/internal/session"
 	"github.com/taigrr/crush/internal/sessionimport"
+	"github.com/taigrr/crush/internal/shell"
 	"github.com/taigrr/crush/internal/skills"
 	"github.com/taigrr/crush/internal/worktree"
 )
@@ -1598,7 +1599,7 @@ func (w *ClientWorkspace) reattach(ctx context.Context) error {
 		Debug:    cur.Debug,
 		Isolated: cur.Isolated,
 		Version:  cur.Version,
-		Env:      os.Environ(),
+		Env:      shell.WithoutProgramResumeToken(os.Environ()),
 	})
 	if err != nil {
 		return err

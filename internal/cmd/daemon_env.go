@@ -17,6 +17,7 @@ var volatileEnv = []string{
 	"_", "PWD", "OLDPWD", "SHLVL", "TERM", "COLORTERM", "COLUMNS", "LINES",
 	"DISPLAY", "WINDOWID", "SSH_TTY", "SSH_CONNECTION", "SSH_CLIENT",
 	"SECURITYSESSIONID", "LaunchInstanceID",
+	"OSC7577_TOKEN",
 }
 
 var volatilePrefixes = []string{
