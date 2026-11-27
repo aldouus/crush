@@ -143,16 +143,16 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cmd := m.handleAgentNotification(msg.Payload); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+		// A run finished somewhere: refresh the session navigator so its
+		// busy/unread markers stay current. This stays on the per-turn
+		// notification, which follows the unread stamp; RunComplete is
+		// once per run (a goal loop runs many turns) and would double the
+		// load if refreshed on as well.
+		if cmd := m.refreshNavigatorAfterRun(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	case pubsub.Event[notify.RunComplete]:
 		m.noteRunComplete(msg.Payload)
-		// A run finished somewhere: refresh the session navigator so its
-		// busy/unread markers stay current. Skip while it is focused: a
-		// rebuild reorders rows (busy/unread/recent) and would move the
-		// cursor out from under the user mid-navigation, causing enter to
-		// act on the wrong session. Live markers refresh on next open.
-		if m.leftSidebarVisible && m.focus != uiFocusLeftSidebar {
-			cmds = append(cmds, m.loadWorkspaceOverviews())
-		}
 	case previewTickMsg:
 		if cmd := m.handlePreviewTick(msg); cmd != nil {
 			cmds = append(cmds, cmd)
