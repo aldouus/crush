@@ -96,30 +96,30 @@ func (m *UI) programStatusRecords() map[string]programStatusRecord {
 				if sess.ID == "" || sess.ID == open {
 					continue
 				}
+				if sess.IsBusy {
+					delete(m.sessionOutcome, sess.ID)
+				}
 				rec := sessionRecord(sess, m.pendingPermissions[sess.ID], m.pendingQuestions[sess.ID], m.attentionPending[sess.ID], m.sessionOutcome[sess.ID])
 				children[rec.id] = rec
 			}
 		}
 	}
-	var perm *permission.PermissionRequest
-	var q *question.Request
-	if open != "" {
-		perm = m.pendingPermissions[open]
-		q = m.pendingQuestions[open]
+	if open == "" {
+		return children
 	}
-	rec := rootRecord(m, perm, q)
+	if m.isSessionBusy() {
+		delete(m.sessionOutcome, open)
+	}
+	rec := openRecord(m, m.pendingPermissions[open], m.pendingQuestions[open])
 	children[rec.id] = rec
 	return children
 }
 
-func rootRecord(m *UI, perm *permission.PermissionRequest, q *question.Request) programStatusRecord {
-	id := ""
-	rec := programStatusRecord{state: termstatus.StateIdle, msg: "Ready"}
-	if m.hasSession() {
-		id = m.session.ID
-		rec.title = m.session.Title
-	}
-	rec.id = recordID(id)
+// openRecord reports the session the user is looking at. It is called
+// only when one is open.
+func openRecord(m *UI, perm *permission.PermissionRequest, q *question.Request) programStatusRecord {
+	id := m.session.ID
+	rec := programStatusRecord{id: recordID(id), title: m.session.Title, state: termstatus.StateIdle, msg: "Ready"}
 	switch {
 	case perm != nil:
 		rec.state, rec.kind, rec.msg = termstatus.StateBlocked, termstatus.KindPermission, firstNonEmpty(perm.Description, "Permission required")
@@ -128,7 +128,7 @@ func rootRecord(m *UI, perm *permission.PermissionRequest, q *question.Request) 
 	case m.isSessionBusy():
 		rec.state, rec.msg = termstatus.StateWorking, programStatusWorking
 	default:
-		if out, ok := m.sessionOutcome[id]; ok && id != "" {
+		if out, ok := m.sessionOutcome[id]; ok {
 			rec.state, rec.msg = out.state, out.msg
 		}
 	}
@@ -170,12 +170,13 @@ func sessionRecord(sess proto.SessionOverview, perm *permission.PermissionReques
 }
 
 // recordID is the session hash under a fixed parent. The root record is
-// never written: replacing it clears every record on the terminal.
+// never written: replacing it clears every record on the terminal. An
+// empty id has no record.
 func recordID(sessionID string) string {
-	if h := session.HashID(sessionID); h != "" {
-		return "s/" + h
+	if sessionID == "" {
+		return ""
 	}
-	return "s/session"
+	return "s/" + session.HashID(sessionID)
 }
 
 // sessionOutcome is the last terminal result of a session, kept so a

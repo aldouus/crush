@@ -60,6 +60,7 @@ func TestMessageTruncated(t *testing.T) {
 	dec, err := base64.StdEncoding.DecodeString(enc)
 	require.NoError(t, err)
 	require.LessOrEqual(t, len(dec), maxMsgDec)
+	require.True(t, strings.HasPrefix("x"+strings.Repeat("é", 1100), string(dec)))
 	require.LessOrEqual(t, len(enc), maxMsgEnc)
 }
 

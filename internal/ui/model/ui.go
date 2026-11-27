@@ -205,7 +205,7 @@ type UI struct {
 	attentionPending map[string]bool
 
 	// sessionOutcome remembers the last finished or failed turn per
-	// session so the program-status record survives until the next turn.
+	// session. It is dropped once that session is busy again.
 	sessionOutcome map[string]sessionOutcome
 	// programStatusKids are the records last written, keyed by their OSC
 	// id, so an unchanged frame emits nothing.

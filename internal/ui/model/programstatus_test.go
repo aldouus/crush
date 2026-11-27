@@ -75,6 +75,33 @@ func TestNoteRunComplete(t *testing.T) {
 	require.Equal(t, "first line", u.sessionOutcome["s"].msg)
 }
 
+func TestProgramStatusNoSessionEmitsNothing(t *testing.T) {
+	t.Parallel()
+	u := newTestUI()
+	u.com.Workspace = &sendWorkspace{readiness: func(context.Context) (bool, error) { return false, nil }}
+	require.Nil(t, u.programStatusCmd())
+}
+
+func TestBusySessionDropsOutcome(t *testing.T) {
+	t.Parallel()
+	u := newTestUI()
+	u.com.Workspace = &sendWorkspace{readiness: func(context.Context) (bool, error) { return false, nil }}
+	const id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	u.session = &session.Session{ID: id, Title: "Open"}
+	u.noteRunComplete(notify.RunComplete{SessionID: id, Text: "done"})
+	require.Contains(t, rawOf(t, u.programStatusCmd()), "state=done")
+
+	u.leftSidebar.SetOverviews([]proto.WorkspaceOverview{{
+		Sessions: []proto.SessionOverview{{ID: id, Title: "Open", IsBusy: true}},
+	}})
+	u.session = nil
+	got := rawOf(t, u.programStatusCmd())
+	require.Contains(t, got, "state=working")
+	require.NotContains(t, got, "state=done")
+	_, kept := u.sessionOutcome[id]
+	require.False(t, kept)
+}
+
 func TestRecordIDStable(t *testing.T) {
 	t.Parallel()
 	a := recordID("11111111-1111-1111-1111-111111111111")
@@ -83,4 +110,5 @@ func TestRecordIDStable(t *testing.T) {
 	require.LessOrEqual(t, len(a), 128)
 	require.NotContains(t, a, "-")
 	require.NotEmpty(t, termstatus.Report{State: termstatus.StateIdle, ID: a}.Sequence())
+	require.Empty(t, recordID(""))
 }

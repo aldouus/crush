@@ -185,23 +185,22 @@ func encodeText(s string, decLimit, encLimit int) string {
 		}
 		b.WriteRune(r)
 	}
-	s = b.String()
-	if len(s) > decLimit {
-		s = s[:decLimit]
-		for !utf8.ValidString(s) {
-			s = s[:len(s)-1]
-		}
-	}
-	// Base64 grows by 4/3 and rounds up, so a decoded string inside the
-	// decoded cap can still encode past the encoded cap. Shorten it.
-	for len(s) > 0 && len(base64.StdEncoding.EncodeToString([]byte(s))) > encLimit {
-		s = s[:len(s)-1]
-		for len(s) > 0 && !utf8.ValidString(s) {
-			s = s[:len(s)-1]
-		}
-	}
+	s = truncateRunes(b.String(), decLimit, encLimit)
 	if s == "" {
 		return ""
 	}
 	return base64.StdEncoding.EncodeToString([]byte(s))
+}
+
+// truncateRunes drops whole runes until the text fits both caps. Base64
+// grows by 4/3 and rounds up, so the decoded cap alone is not enough.
+func truncateRunes(s string, decLimit, encLimit int) string {
+	for len(s) > decLimit || (s != "" && len(base64.StdEncoding.EncodeToString([]byte(s))) > encLimit) {
+		_, size := utf8.DecodeLastRuneInString(s)
+		if size <= 0 {
+			return ""
+		}
+		s = s[:len(s)-size]
+	}
+	return s
 }
