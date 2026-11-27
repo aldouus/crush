@@ -76,6 +76,50 @@ type State struct {
 	PrevKey []byte        `json:"prev_key,omitempty"`
 	Members []Member      `json:"members"`
 	Pending []JoinRequest `json:"pending,omitempty"`
+	// Departed remembers members that left, so membership gossip from a
+	// peer that missed the leave never brings them back.
+	Departed []Departure `json:"departed,omitempty"`
+}
+
+// Departure records that a member left the cluster at LeftAt. A member
+// record joined at or before LeftAt is a stale copy of the departed
+// node; one joined later is the same node rejoining.
+type Departure struct {
+	NodeID string    `json:"node_id"`
+	LeftAt time.Time `json:"left_at"`
+}
+
+// departed reports whether m is a stale record of a member that left.
+func (s State) departed(m Member) bool {
+	i := slices.IndexFunc(s.Departed, func(d Departure) bool { return d.NodeID == m.NodeID })
+	return i >= 0 && !m.JoinedAt.After(s.Departed[i].LeftAt)
+}
+
+// HasDeparted reports whether nodeID is recorded as having left and
+// has not rejoined.
+func (s State) HasDeparted(nodeID string) bool {
+	if _, ok := s.Member(nodeID); ok {
+		return false
+	}
+	return slices.ContainsFunc(s.Departed, func(d Departure) bool { return d.NodeID == nodeID })
+}
+
+// recordDeparture notes that nodeID left at t (keeping the latest time)
+// and drops its member record if that record predates t.
+func (s *State) recordDeparture(nodeID string, t time.Time) {
+	if i := slices.IndexFunc(s.Departed, func(d Departure) bool { return d.NodeID == nodeID }); i >= 0 {
+		if t.After(s.Departed[i].LeftAt) {
+			s.Departed[i].LeftAt = t
+		}
+	} else {
+		s.Departed = append(s.Departed, Departure{NodeID: nodeID, LeftAt: t})
+	}
+	s.Members = slices.DeleteFunc(s.Members, func(m Member) bool { return s.departed(m) })
+}
+
+// pruneDepartures forgets departures older than before.
+func (s *State) pruneDepartures(before time.Time) {
+	s.Departed = slices.DeleteFunc(s.Departed, func(d Departure) bool { return d.LeftAt.Before(before) })
 }
 
 // Member returns the member with nodeID.
@@ -275,6 +319,7 @@ func cloneState(st State) State {
 		p.Endpoints = slices.Clone(p.Endpoints)
 		out.Pending[i] = p
 	}
+	out.Departed = slices.Clone(st.Departed)
 	return out
 }
 
