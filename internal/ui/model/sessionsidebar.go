@@ -153,6 +153,14 @@ type SessionsSidebar struct {
 	// red "prompt-pending" indicator so a background session blocked on
 	// a prompt is visible in the list before the user switches to it.
 	pendingSessions map[string]bool
+
+	// proj caches the inbox sections and per-workspace counts so a
+	// background page apply only reprojects the workspaces that grew.
+	proj sidebarProjection
+
+	// bg holds sessions paged in by the background loader beyond the
+	// bounded overview, merged into every overview refresh.
+	bg backgroundSessions
 }
 
 // SetPendingSessions replaces the set of session IDs that have an
@@ -161,6 +169,7 @@ type SessionsSidebar struct {
 // indicators.
 func (s *SessionsSidebar) SetPendingSessions(ids map[string]bool) {
 	s.pendingSessions = ids
+	s.proj.invalidate()
 }
 
 // HasPending reports whether the given session has an unresolved
@@ -256,10 +265,14 @@ func (s *SessionsSidebar) searchQuery() string {
 // and the swarm animal — so a query can match by project or swarm name too.
 // With no active query every session matches.
 func (s *SessionsSidebar) sessionMatchesFilter(sess proto.SessionOverview, ws proto.WorkspaceOverview) bool {
+	return s.matchesQuery(s.searchQuery(), sess, ws)
+}
+
+// matchesQuery is sessionMatchesFilter with the query q precomputed.
+func (s *SessionsSidebar) matchesQuery(q string, sess proto.SessionOverview, ws proto.WorkspaceOverview) bool {
 	if !s.nodeMatches(ws) {
 		return false
 	}
-	q := s.searchQuery()
 	if q == "" {
 		return true
 	}
@@ -276,6 +289,28 @@ func (s *SessionsSidebar) AttachedSessions() []proto.SessionOverview {
 		}
 	}
 	return nil
+}
+
+// Truncated reports whether any workspace's session list was bounded by
+// the server (see proto.WorkspaceOverview.SessionCount).
+func (s *SessionsSidebar) Truncated() bool {
+	for _, ws := range s.overviews {
+		if ws.SessionCount > len(ws.Sessions) {
+			return true
+		}
+	}
+	return false
+}
+
+// hiddenSessions is how many of workspace wi's sessions the server left
+// out of a bounded list. They are unknown to any filter, so they only
+// count when no filter is active.
+func (s *SessionsSidebar) hiddenSessions(wi int) int {
+	ws := s.overviews[wi]
+	if s.searchQuery() != "" || !s.nodeMatches(ws) {
+		return 0
+	}
+	return max(0, ws.SessionCount-len(ws.Sessions))
 }
 
 // WorkspaceCount returns the number of known workspaces.
@@ -345,10 +380,31 @@ type SessionCounts struct {
 // active the tally is computed over the FILTERED set only, so the summary
 // block agrees with the (filtered) rows shown below it.
 func (s *SessionsSidebar) SessionCounts() SessionCounts {
+	if !s.proj.countsValid || len(s.proj.counts) != len(s.overviews) {
+		q := s.searchQuery()
+		s.proj.counts = slices.Grow(s.proj.counts[:0], len(s.overviews))[:len(s.overviews)]
+		for wi := range s.overviews {
+			s.proj.counts[wi] = s.workspaceCounts(q, wi)
+		}
+		s.proj.countsValid = true
+	}
 	var c SessionCounts
-	for _, ws := range s.overviews {
+	for _, wc := range s.proj.counts {
+		c.Ready += wc.Ready
+		c.Working += wc.Working
+		c.Total += wc.Total
+	}
+	return c
+}
+
+// workspaceCounts is workspace wi's share of [SessionsSidebar.SessionCounts].
+func (s *SessionsSidebar) workspaceCounts(q string, wi int) SessionCounts {
+	var c SessionCounts
+	ws := s.overviews[wi]
+	{
+		c.Total += s.hiddenSessions(wi)
 		for _, sess := range ws.Sessions {
-			if !s.sessionMatchesFilter(sess, ws) {
+			if !s.matchesQuery(q, sess, ws) {
 				continue
 			}
 			c.Total++
@@ -371,11 +427,21 @@ func (s *SessionsSidebar) SessionCounts() SessionCounts {
 	return c
 }
 
+// Overviews returns the last overview snapshot, used to report every
+// session's program status.
+func (s *SessionsSidebar) Overviews() []proto.WorkspaceOverview {
+	if s == nil {
+		return nil
+	}
+	return s.overviews
+}
+
 // SetOverviews replaces the listed data and rebuilds the navigable rows,
 // keeping the cursor on the same session when possible.
 func (s *SessionsSidebar) SetOverviews(overviews []proto.WorkspaceOverview) {
 	prevID := s.selectedSessionID()
 	s.overviews = overviews
+	s.bg.mergeInto(s.overviews)
 	s.sortSessions()
 	s.rebuildRows()
 	s.restoreCursor(prevID)
@@ -407,6 +473,13 @@ func (s *SessionsSidebar) SetActiveSession(id string) {
 // Sort key: active first, then busy, then unread, then UpdatedAt desc.
 func (s *SessionsSidebar) sortSessions() {
 	for wi := range s.overviews {
+		s.sortWorkspaceSessions(wi)
+	}
+}
+
+// sortWorkspaceSessions sorts workspace wi's sessions for display.
+func (s *SessionsSidebar) sortWorkspaceSessions(wi int) {
+	{
 		sess := s.overviews[wi].Sessions
 		sort.SliceStable(sess, func(i, j int) bool {
 			a, b := sess[i], sess[j]
@@ -432,12 +505,18 @@ func (s *SessionsSidebar) sortSessions() {
 // rebuildRows reprojects overviews into the flattened navigable row list,
 // dispatching on the current view mode, then clamps and snaps the cursor.
 func (s *SessionsSidebar) rebuildRows() {
+	s.proj.invalidate()
 	s.rows = s.rows[:0]
 	if s.mode == sidebarModeInbox {
 		s.rebuildInboxRows()
 	} else {
 		s.rebuildGroupedRows()
 	}
+	s.clampCursor()
+}
+
+// clampCursor keeps the cursor inside rows and off headers.
+func (s *SessionsSidebar) clampCursor() {
 	if s.cursor >= len(s.rows) {
 		s.cursor = len(s.rows) - 1
 	}
@@ -463,68 +542,169 @@ func (s *SessionsSidebar) rebuildRows() {
 // (wsIdx, sessIdx), so sessionIDAt/rowForSessionID/Selected/ClickToActivate
 // and cross-workspace activation all work unchanged over the flat layout.
 func (s *SessionsSidebar) rebuildInboxRows() {
-	type ref struct{ wi, si int }
-	var blocked, favorite, running, unread, other []ref
-	for wi, ws := range s.overviews {
-		for si, sess := range ws.Sessions {
-			if !s.sessionMatchesFilter(sess, ws) {
+	q := s.searchQuery()
+	for i := range s.proj.buckets {
+		s.proj.buckets[i] = s.proj.buckets[i][:0]
+	}
+	for wi := range s.overviews {
+		s.collectInboxRefs(q, wi, &s.proj.buckets)
+	}
+	for i := range s.proj.buckets {
+		slices.SortFunc(s.proj.buckets[i], compareInboxRefs)
+	}
+	s.proj.inboxValid = true
+	s.emitInboxRows()
+}
+
+// collectInboxRefs appends workspace wi's matching sessions to the inbox
+// section they belong to.
+func (s *SessionsSidebar) collectInboxRefs(q string, wi int, buckets *[inboxSectionCount][]inboxRef) {
+	ws := s.overviews[wi]
+	for si, sess := range ws.Sessions {
+		if !s.matchesQuery(q, sess, ws) {
+			continue
+		}
+		sec := inboxRead
+		switch {
+		case s.HasPending(sess.ID):
+			sec = inboxBlocked
+		case sess.Favorite:
+			sec = inboxFavorite
+		case sess.IsBusy:
+			sec = inboxRunning
+		case sess.Unread:
+			sec = inboxUnread
+		}
+		buckets[sec] = append(buckets[sec], inboxRef{upd: sess.UpdatedAt, wi: int32(wi), si: int32(si)})
+	}
+}
+
+// emitInboxRows appends the cached inbox sections to rows.
+func (s *SessionsSidebar) emitInboxRows() {
+	n := 0
+	for _, b := range s.proj.buckets {
+		if len(b) > 0 {
+			n += 1 + len(b)
+		}
+	}
+	s.rows = slices.Grow(s.rows, n)
+	for sec, refs := range s.proj.buckets {
+		if len(refs) == 0 {
+			continue
+		}
+		s.rows = append(s.rows, sidebarRow{kind: sidebarRowSection, label: inboxSectionLabels[sec]})
+		for _, r := range refs {
+			s.rows = append(s.rows, sidebarRow{kind: sidebarRowSession, wsIdx: int(r.wi), sessIdx: int(r.si)})
+		}
+	}
+}
+
+// reprojectInbox refreshes the cached inbox sections for the workspaces
+// marked in changed only, then re-emits rows. The result equals a full
+// rebuildInboxRows: sections are ordered by (UpdatedAt desc, wi, si),
+// which is exactly the stable sort over workspace/session order.
+func (s *SessionsSidebar) reprojectInbox(changed []bool) {
+	q := s.searchQuery()
+	var fresh [inboxSectionCount][]inboxRef
+	for wi, c := range changed {
+		if c {
+			s.collectInboxRefs(q, wi, &fresh)
+		}
+	}
+	for sec := range s.proj.buckets {
+		old := s.proj.buckets[sec]
+		add := fresh[sec]
+		slices.SortFunc(add, compareInboxRefs)
+		merged := slices.Grow(s.proj.spare[sec][:0], len(old)+len(add))
+		j := 0
+		for _, r := range old {
+			if changed[r.wi] {
 				continue
 			}
-			switch {
-			case s.HasPending(sess.ID):
-				blocked = append(blocked, ref{wi, si})
-			case sess.Favorite:
-				favorite = append(favorite, ref{wi, si})
-			case sess.IsBusy:
-				running = append(running, ref{wi, si})
-			case sess.Unread:
-				unread = append(unread, ref{wi, si})
-			default:
-				other = append(other, ref{wi, si})
+			for j < len(add) && compareInboxRefs(add[j], r) < 0 {
+				merged = append(merged, add[j])
+				j++
 			}
+			merged = append(merged, r)
 		}
+		merged = append(merged, add[j:]...)
+		s.proj.buckets[sec] = merged
+		s.proj.spare[sec] = old
 	}
-	byUpdatedDesc := func(refs []ref) {
-		slices.SortStableFunc(refs, func(x, y ref) int {
-			a := s.overviews[x.wi].Sessions[x.si]
-			b := s.overviews[y.wi].Sessions[y.si]
-			return cmp.Compare(b.UpdatedAt, a.UpdatedAt)
-		})
-	}
-	byUpdatedDesc(blocked)
-	byUpdatedDesc(favorite)
-	byUpdatedDesc(running)
-	byUpdatedDesc(unread)
-	byUpdatedDesc(other)
+	s.rows = s.rows[:0]
+	s.emitInboxRows()
+	s.clampCursor()
+}
 
-	emit := func(label string, refs []ref) {
-		if len(refs) == 0 {
-			return
-		}
-		s.rows = append(s.rows, sidebarRow{kind: sidebarRowSection, label: label})
-		for _, r := range refs {
-			s.rows = append(s.rows, sidebarRow{kind: sidebarRowSession, wsIdx: r.wi, sessIdx: r.si})
-		}
+// Inbox sections, highest priority first.
+const (
+	inboxBlocked = iota
+	inboxFavorite
+	inboxRunning
+	inboxUnread
+	inboxRead
+	inboxSectionCount
+)
+
+var inboxSectionLabels = [inboxSectionCount]string{"Blocked", "Favorite", "Running", "Unread", "Read"}
+
+// inboxRef locates one inbox session row; upd is its UpdatedAt.
+type inboxRef struct {
+	upd    int64
+	wi, si int32
+}
+
+func compareInboxRefs(x, y inboxRef) int {
+	if c := cmp.Compare(y.upd, x.upd); c != 0 {
+		return c
 	}
-	emit("Blocked", blocked)
-	emit("Favorite", favorite)
-	emit("Running", running)
-	emit("Unread", unread)
-	emit("Read", other)
+	if c := cmp.Compare(x.wi, y.wi); c != 0 {
+		return c
+	}
+	return cmp.Compare(x.si, y.si)
+}
+
+// sidebarProjection caches derived sidebar state. It is dropped by every
+// full rebuildRows and by inputs that change classification (pending set),
+// and patched per workspace by ApplyBackgroundSessions.
+type sidebarProjection struct {
+	inboxValid  bool
+	buckets     [inboxSectionCount][]inboxRef
+	spare       [inboxSectionCount][]inboxRef
+	countsValid bool
+	counts      []SessionCounts
+}
+
+func (p *sidebarProjection) invalidate() {
+	p.inboxValid = false
+	p.countsValid = false
 }
 
 // filteredIdxs returns the indices (into ws.Sessions, preserving sort order)
-// of the sessions in workspace wi that pass the active filter. With no
-// active query it returns every index.
-func (s *SessionsSidebar) filteredIdxs(wi int) []int {
+// of the first limit sessions in workspace wi that pass the active filter,
+// and how many pass in total. With no active query every session passes.
+func (s *SessionsSidebar) filteredIdxs(q string, wi, limit int) (idxs []int, total int) {
 	ws := s.overviews[wi]
-	idxs := make([]int, 0, len(ws.Sessions))
+	if q == "" {
+		if !s.nodeMatches(ws) {
+			return nil, 0
+		}
+		total = len(ws.Sessions)
+		idxs = make([]int, min(limit, total))
+		for i := range idxs {
+			idxs[i] = i
+		}
+		return idxs, total
+	}
 	for si, sess := range ws.Sessions {
-		if s.sessionMatchesFilter(sess, ws) {
-			idxs = append(idxs, si)
+		if s.matchesQuery(q, sess, ws) {
+			if len(idxs) < limit {
+				idxs = append(idxs, si)
+			}
+			total++
 		}
 	}
-	return idxs
+	return idxs, total
 }
 
 // rebuildGroupedRows projects the default workspace-grouped, tiered view
@@ -533,6 +713,7 @@ func (s *SessionsSidebar) filteredIdxs(wi int) []int {
 // zero matches contributes no header (composes with hide-empty-headers).
 func (s *SessionsSidebar) rebuildGroupedRows() {
 	caps := s.computeCaps()
+	q := s.searchQuery()
 	emittedGroups := 0
 	for wi := range s.overviews {
 		// Skip workspaces with no visible (and, when filtering, no matching)
@@ -544,8 +725,8 @@ func (s *SessionsSidebar) rebuildGroupedRows() {
 		// — the server-side overview (ListWorkspaceOverviews) omits archived
 		// ones, and proto.SessionOverview has no Archived field. So an empty
 		// filtered set means "no visible/matching sessions".
-		idxs := s.filteredIdxs(wi)
-		if len(idxs) == 0 {
+		idxs, total := s.filteredIdxs(q, wi, caps[wi])
+		if total == 0 {
 			continue
 		}
 		// Blank lines separate visible workspace groups. Counting emitted
@@ -556,11 +737,11 @@ func (s *SessionsSidebar) rebuildGroupedRows() {
 		}
 		emittedGroups++
 		s.rows = append(s.rows, sidebarRow{kind: sidebarRowWorkspace, wsIdx: wi})
-		shown := min(len(idxs), caps[wi])
-		for _, si := range idxs[:shown] {
+		shown := len(idxs)
+		for _, si := range idxs {
 			s.rows = append(s.rows, sidebarRow{kind: sidebarRowSession, wsIdx: wi, sessIdx: si})
 		}
-		if remaining := len(idxs) - shown; remaining > 0 {
+		if remaining := total - shown + s.hiddenSessions(wi); remaining > 0 {
 			s.rows = append(s.rows, sidebarRow{kind: sidebarRowOverflow, wsIdx: wi, remaining: remaining})
 		}
 	}
@@ -598,12 +779,16 @@ func (s *SessionsSidebar) computeCaps() []int {
 	// use the FILTERED session set so an active "/" search rebalances the
 	// budget over just the matches (and a workspace filtered to zero drops
 	// out of nonEmpty entirely, matching rebuildGroupedRows).
+	q := s.searchQuery()
 	counts := make([]int, n)
 	total := 0
 	nonEmpty := 0
 	for i := range s.overviews {
-		c := len(s.filteredIdxs(i))
+		_, c := s.filteredIdxs(q, i, 0)
 		counts[i] = c
+		if c > 0 {
+			c += s.hiddenSessions(i)
+		}
 		if c == 0 {
 			continue
 		}
@@ -1220,7 +1405,6 @@ func (s *SessionsSidebar) Render(width, height int, focused bool) string {
 		s.restoreCursor(prevID)
 	}
 
-	rendered := s.renderRows(width, focused)
 	// Clamp scroll so the cursor stays visible within bodyHeight.
 	if s.cursor >= s.scroll+bodyHeight {
 		s.scroll = s.cursor - bodyHeight + 1
@@ -1231,11 +1415,10 @@ func (s *SessionsSidebar) Render(width, height int, focused bool) string {
 	if s.scroll < 0 {
 		s.scroll = 0
 	}
-	end := min(len(rendered), s.scroll+bodyHeight)
-	for i := s.scroll; i < end; i++ {
-		lines = append(lines, rendered[i])
-	}
-	if len(rendered) == 0 {
+	// Only the visible window is rendered so frame cost is independent of
+	// the total number of loaded rows.
+	lines = append(lines, s.renderRows(width, focused, s.scroll, s.scroll+bodyHeight)...)
+	if len(s.rows) == 0 {
 		lines = append(lines, t.Resource.AdditionalText.Render("No sessions yet"))
 	}
 
@@ -1338,14 +1521,21 @@ func plural(n int, word string) string {
 	return word + "s"
 }
 
-// renderRows renders each navigable row to a styled line at the given width.
+// renderRows renders the navigable rows in [start, end) (clamped to the row
+// list) to styled lines at the given width.
 // focused reports whether the sidebar owns keyboard focus. When it does not,
 // the cursor row is marked with the selection bar alone rather than a
 // full-row highlight, so it does not compete with the editor caret.
-func (s *SessionsSidebar) renderRows(width int, focused bool) []string {
+func (s *SessionsSidebar) renderRows(width int, focused bool, start, end int) []string {
 	t := s.com.Styles
-	out := make([]string, 0, len(s.rows))
-	for i, r := range s.rows {
+	start = max(0, start)
+	end = min(len(s.rows), end)
+	if start >= end {
+		return nil
+	}
+	out := make([]string, 0, end-start)
+	for i := start; i < end; i++ {
+		r := s.rows[i]
 		selected := i == s.cursor
 		switch r.kind {
 		case sidebarRowSpacer:

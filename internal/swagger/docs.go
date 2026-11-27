@@ -1782,6 +1782,32 @@ const docTemplate = `{
                     "workspaces"
                 ],
                 "summary": "List workspace/session overviews",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Max sessions per workspace (display order); session_count then carries the total. Omitted or 0 lists all.",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Non-empty: only this node's workspaces (node-to-node fetch)",
+                        "name": "local",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Page one local workspace's sessions: the response is that single workspace, limit sessions after the after cursor, with next_cursor set while more follow.",
+                        "name": "root",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Paging cursor from a previous page's next_cursor (requires root)",
+                        "name": "after",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -1790,6 +1816,12 @@ const docTemplate = `{
                             "items": {
                                 "$ref": "#/definitions/proto.WorkspaceOverview"
                             }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/proto.Error"
                         }
                     },
                     "500": {
@@ -10433,6 +10465,10 @@ const docTemplate = `{
                 "last_error": {
                     "type": "string"
                 },
+                "next_cursor": {
+                    "description": "NextCursor, on a single-workspace page (root query parameter), is\npassed back as after to fetch the following page. Empty on the\nlast page and on full listings.",
+                    "type": "string"
+                },
                 "node_id": {
                     "description": "NodeID and NodeName identify the cluster node that owns the\nworkspace. Empty means the server answering the request.",
                     "type": "string"
@@ -10442,6 +10478,10 @@ const docTemplate = `{
                 },
                 "root": {
                     "type": "string"
+                },
+                "session_count": {
+                    "description": "SessionCount is the workspace's total number of listed sessions\nwhen the request asked for a bounded list (limit); Sessions then\nholds only the first limit of them in display order. Zero when the\nlist is complete.",
+                    "type": "integer"
                 },
                 "sessions": {
                     "type": "array",
