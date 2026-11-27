@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	xstrings "github.com/charmbracelet/x/exp/strings"
 
+	"github.com/taigrr/crush/internal/termstatus"
 	"github.com/taigrr/crush/internal/ui/notification"
 )
 
@@ -82,6 +83,7 @@ func QueryCmd(env uv.Environ) tea.Cmd {
 	sb.WriteString(ansi.QueryModifyOtherKeys)
 	sb.WriteString(ansi.RequestModeFocusEvent)
 	sb.WriteString(notification.OSC99QuerySequence())
+	sb.WriteString(termstatus.Query)
 
 	// Queries that should only be sent to "smart" normal terminals.
 	shouldQueryFor := shouldQueryCapabilities(env)

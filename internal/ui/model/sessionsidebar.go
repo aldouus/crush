@@ -371,6 +371,15 @@ func (s *SessionsSidebar) SessionCounts() SessionCounts {
 	return c
 }
 
+// Overviews returns the last overview snapshot, used to report every
+// session's program status.
+func (s *SessionsSidebar) Overviews() []proto.WorkspaceOverview {
+	if s == nil {
+		return nil
+	}
+	return s.overviews
+}
+
 // SetOverviews replaces the listed data and rebuilds the navigable rows,
 // keeping the cursor on the same session when possible.
 func (s *SessionsSidebar) SetOverviews(overviews []proto.WorkspaceOverview) {
