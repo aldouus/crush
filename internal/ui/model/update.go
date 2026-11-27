@@ -72,6 +72,8 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cmd := m.handleFileCompletion(msg); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+	case clusterSelfMsg:
+		m.handleClusterSelf(msg)
 	case serverVersionMsg:
 		m.versionMismatch = msg.mismatch
 		m.serverVersionStr = msg.version

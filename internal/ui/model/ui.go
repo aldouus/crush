@@ -227,6 +227,10 @@ type UI struct {
 		dir  string
 	}
 
+	// clusterSelfName is the attached server's cluster node name, shown
+	// beside the version ("" when not in a cluster).
+	clusterSelfName string
+
 	// quitting makes the last view clear the program-resume record.
 	quitting bool
 
@@ -619,6 +623,7 @@ func (m *UI) Init() tea.Cmd {
 	}
 	// Detect client/server version mismatch and keep re-checking.
 	cmds = append(cmds, m.checkServerVersion(), m.scheduleVersionCheck())
+	cmds = append(cmds, m.fetchClusterSelf())
 	// Keep the between-messages assistant-info "since" label current.
 	cmds = append(cmds, m.scheduleAssistantInfoTick())
 	return tea.Batch(cmds...)
