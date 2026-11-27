@@ -144,7 +144,7 @@ crush skill print
 		anim.SetDefaultLowBandwidth(com.Config().LowBandwidthEnabled())
 		model := ui.New(com, sessionID, continueLast, resumeCommand(cmd))
 
-		var env uv.Environ = os.Environ()
+		var env uv.Environ = tuiEnviron()
 		opts := []tea.ProgramOption{
 			tea.WithEnvironment(env),
 			tea.WithContext(cmd.Context()),
@@ -187,6 +187,9 @@ const defaultVersionTemplate = `{{with .DisplayName}}{{printf "%s " .}}{{end}}{{
 `
 
 func Execute() {
+	// Take the OSC 7577 token before anything can spawn a child.
+	takeProgramResumeToken()
+
 	// FIXME: config.Load uses slog internally during provider resolution,
 	// but the file-based logger isn't set up until after config is loaded
 	// (because the log path depends on the data directory from config).
