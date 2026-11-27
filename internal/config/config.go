@@ -994,6 +994,7 @@ func allToolNames() []string {
 		"swarm",
 		"workspace_lookup",
 		"rename_session",
+		"cluster",
 		"question",
 	}
 }

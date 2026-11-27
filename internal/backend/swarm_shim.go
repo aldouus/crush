@@ -132,3 +132,65 @@ func (s *swarmShim) SearchAllWorkspaces(ctx context.Context, requestingWorkspace
 		SemanticUsed: res.SemanticUsed,
 	}, nil
 }
+
+// ClusterActive implements tools.ClusterBackend.
+func (s *swarmShim) ClusterActive() bool {
+	return s.b.ClusterActive()
+}
+
+// ClusterNodes implements tools.ClusterBackend.
+func (s *swarmShim) ClusterNodes(ctx context.Context) ([]tools.ClusterNode, error) {
+	nodes, err := s.b.ClusterNodes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]tools.ClusterNode, 0, len(nodes))
+	for _, n := range nodes {
+		cn := tools.ClusterNode{
+			NodeID:    n.Member.NodeID,
+			Name:      n.Member.Name,
+			Version:   n.Member.Version,
+			Self:      n.Self,
+			Online:    n.Online,
+			RTTMillis: n.RTTMillis,
+		}
+		if st := n.Stats; st != nil {
+			cn.Platform = st.Platform
+			cn.Hostname = st.Hostname
+			cn.CPUPercent = st.CPUPercent
+			cn.CPUCores = st.CPUCores
+			cn.MemPercent = st.MemPercent
+			cn.Sessions = st.Sessions
+			cn.FreeScore = st.FreeScore()
+			cn.HasStats = true
+			for _, j := range st.Jobs {
+				cn.Jobs = append(cn.Jobs, tools.ClusterJob{
+					SessionID:     j.SessionID,
+					Title:         j.Title,
+					WorkspaceRoot: j.WorkspaceRoot,
+					Color:         j.Color,
+					Animal:        j.Animal,
+					Blocked:       j.Blocked,
+				})
+			}
+		}
+		out = append(out, cn)
+	}
+	return out, nil
+}
+
+// CreateSessionOnNode implements tools.ClusterBackend.
+func (s *swarmShim) CreateSessionOnNode(ctx context.Context, node, path, title, modelRef string) (tools.SwarmLookupResult, error) {
+	r, err := s.b.CreateSwarmSessionOnNode(ctx, node, path, title, modelRef)
+	if err != nil {
+		return tools.SwarmLookupResult{}, err
+	}
+	return tools.SwarmLookupResult{
+		WorkspaceID:   r.WorkspaceID,
+		SessionID:     r.SessionID,
+		Color:         r.Color,
+		Animal:        r.Animal,
+		WorkspaceRoot: r.WorkspaceRoot,
+		NodeID:        r.NodeID,
+	}, nil
+}

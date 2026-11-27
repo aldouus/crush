@@ -1201,6 +1201,13 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 		))
 		allTools = append(allTools, tools.NewWorkspaceLookupTool(swarmBackend))
 		allTools = append(allTools, tools.NewRenameSessionTool(swarmBackend))
+		// The cluster tool is gated per turn on cluster membership, so
+		// it appears and disappears as this server joins or leaves.
+		if cb, ok := swarmBackend.(tools.ClusterBackend); ok {
+			allTools = append(allTools, tools.NewClusterTool(
+				swarmBackend, cb, c.sessions, swarmConfigFn, swarmWorkspaceID,
+			))
+		}
 	}
 
 	// Editor bridge tools. The bridge is resolved per-turn from the
