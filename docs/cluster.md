@@ -84,7 +84,27 @@ Treat it like a password.
    `crush cluster pending`); the user approves (`crush cluster approve
    <node>`).
 4. A pins B, returns the full member list; B pins every member. A tells
-   the other members about B.
+   the other members about B, retrying members it cannot reach with
+   backoff for up to 10 minutes.
+5. Membership anti-entropy: every member pulls each peer's member list
+   (`GET /cluster/v1/members`, member-authenticated) when its listener
+   starts and every 30 seconds, and merges members it lacks with the
+   same rules as an announcement: self is skipped, a pinned key is never
+   replaced, and device records are accepted only from their own member.
+   A member that missed the announcement (or can never reach B at all)
+   learns B from any third member. Leaves are recorded as departures
+   (`departed` in `cluster.json`, kept 30 days) and gossiped too, so a
+   peer that missed a leave never brings the member back; a member
+   record joined after the departure is a rejoin.
+6. Paired devices get `crush.client.v1.<dev>.members` (`{"v":1,
+   "type":"members","at":...,"members":[...]}`, members shaped like the
+   pairing poll's) whenever the members or their device endpoints
+   change.
+
+A session-overview delta only reports a node in `reset_nodes` as gone
+when this member knows it left, or has completed a gossip round since
+start; a node merely not yet learned is reported in `stale_nodes` and
+keeps its cursor position.
 
 ### Daemon
 

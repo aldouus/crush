@@ -160,6 +160,9 @@ func newPairingService(s *Server, n *cluster.Node) (*pairingService, error) {
 	n.Store().Watch(func(st cluster.State) {
 		// Own endpoints may have changed, which moves wildcard binds.
 		p.markAdvertise()
+		if b := p.bridge.Load(); b != nil {
+			b.membersChanged()
+		}
 		if p.keyRotated(st.KeyVersion) {
 			if b := p.bridge.Load(); b != nil {
 				b.reauth(reauthKeyRotation)

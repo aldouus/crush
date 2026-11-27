@@ -28,6 +28,7 @@ const (
 
 var (
 	_ backend.SessionDeltaSource = (*meshBridge)(nil)
+	_ backend.MembershipSource   = (*meshBridge)(nil)
 
 	errMemberRecentlyDown = errors.New("member recently unreachable")
 	errTooManyDeltaPages  = errors.New("too many session overview pages")
@@ -62,6 +63,15 @@ func (m *meshBridge) SessionOverviewDeltas(ctx context.Context, since map[string
 	}
 	wg.Wait()
 	return out
+}
+
+// NodeLeft reports whether a node absent from this member's list is
+// gone: it left (a recorded departure), or membership gossip has reached
+// a peer since start, so any member a peer knows is known here too.
+// Before that, an unknown node may be a member this node has not
+// learned about yet, and devices keep its rows.
+func (m *meshBridge) NodeLeft(nodeID string) bool {
+	return m.node.Departed(nodeID) || m.node.GossipSynced()
 }
 
 func (m *meshBridge) memberCaller(mem cluster.Member) memberCall {
