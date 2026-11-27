@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -305,11 +306,12 @@ func TestPairingFlowBTypedCodeOverTLS(t *testing.T) {
 
 	// The phone pins the CA fingerprint from the kind 3 code and the node
 	// ID from the leaf.
-	var leafCN string
+	// Handshakes of abandoned dials may still run, so store atomically.
+	var leafCN atomic.Value
 	hc := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{
 		InsecureSkipVerify: true, // Verified by VerifyConnection below.
 		VerifyConnection: func(cs tls.ConnectionState) error {
-			leafCN = cs.PeerCertificates[0].Subject.CommonName
+			leafCN.Store(cs.PeerCertificates[0].Subject.CommonName)
 			_, err := x509.ParseCertificate(cs.PeerCertificates[0].Raw)
 			return err
 		},
@@ -324,7 +326,7 @@ func TestPairingFlowBTypedCodeOverTLS(t *testing.T) {
 	dev := &deviceAPI{t: t, base: "https://" + srv.clientAddr, hc: hc}
 	nodeInfo := dev.info()
 	require.NoError(t, pairing.CheckInfo(info, nodeInfo))
-	require.Equal(t, nodeInfo.NodeID, leafCN)
+	require.Equal(t, nodeInfo.NodeID, leafCN.Load())
 
 	sess := pairing.NewDeviceSessionFromSecret(key, secret)
 	var claim pairing.ClaimResponse
