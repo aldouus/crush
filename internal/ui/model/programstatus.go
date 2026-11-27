@@ -14,6 +14,9 @@ import (
 
 const programStatusWorking = "Working"
 
+// programStatusParent is the record every session record lives under.
+const programStatusParent = "s"
+
 // programStatusRecord is one session's OSC 7501 record. Every session,
 // including the open one, is a child of "s": the root record is never
 // used, because replacing it clears every record on the terminal.
@@ -44,6 +47,9 @@ func (r programStatusRecord) same(o programStatusRecord) bool {
 // disappeared are cleared. It returns nil when nothing changed, so a
 // steady frame writes nothing.
 func (m *UI) programStatusCmd() tea.Cmd {
+	if m.quitting {
+		return nil
+	}
 	children := m.programStatusRecords()
 	if m.programStatusInit && sameRecords(children, m.programStatusKids) {
 		return nil
@@ -68,6 +74,18 @@ func (m *UI) programStatusCmd() tea.Cmd {
 		return nil
 	}
 	return tea.Raw(b.String())
+}
+
+// programStatusClearCmd removes every record this program wrote. It is
+// used only when the user quits: a SIGHUP or SIGTERM exit leaves records
+// for the terminal to drop on its own. Clearing the parent "s" clears
+// every session record beneath it.
+func (m *UI) programStatusClearCmd() tea.Cmd {
+	if !m.programStatusInit || len(m.programStatusKids) == 0 {
+		return nil
+	}
+	m.programStatusKids = nil
+	return tea.Raw(termstatus.Report{State: termstatus.StateClear, ID: programStatusParent}.Sequence())
 }
 
 func sameRecords(a, b map[string]programStatusRecord) bool {
@@ -176,7 +194,7 @@ func recordID(sessionID string) string {
 	if sessionID == "" {
 		return ""
 	}
-	return "s/" + session.HashID(sessionID)
+	return programStatusParent + "/" + session.HashID(sessionID)
 }
 
 // sessionOutcome is the last terminal result of a session, kept so a
