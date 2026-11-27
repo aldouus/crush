@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/taigrr/crush/internal/pairing"
 	"github.com/taigrr/crush/internal/proto"
 )
 
@@ -287,6 +288,17 @@ type controlNotice struct {
 	Role     string   `json:"role,omitempty"`
 	Scopes   []string `json:"scopes,omitempty"`
 	At       string   `json:"at"`
+}
+
+// membersNotice is published on crush.client.v1.<dev>.members when the
+// cluster's members or their device endpoints change. Members has the
+// shape of the pairing poll's members, so a device can add a member it
+// has not seen without pairing again.
+type membersNotice struct {
+	V       int                  `json:"v"`
+	Type    string               `json:"type"`
+	At      string               `json:"at"`
+	Members []pairing.MemberInfo `json:"members"`
 }
 
 // attentionNotice is published on crush.client.v1.<dev>.attention.

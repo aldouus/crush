@@ -431,3 +431,37 @@ func TestSessionOverviewPassKeyIncludesFields(t *testing.T) {
 	slim := SessionOverviewQuery{Since: "x", Fields: proto.SessionOverviewFieldsRow}
 	require.NotEqual(t, slim.passKey(), SessionOverviewQuery{Since: "x"}.passKey())
 }
+
+// convergingBridge is a deltaBridge whose membership is still
+// converging: nodes in left are gone, others merely unknown.
+type convergingBridge struct {
+	deltaBridge
+	left map[string]bool
+}
+
+func (c *convergingBridge) NodeLeft(nodeID string) bool { return c.left[nodeID] }
+
+func TestSessionOverviewDeltaUnknownNodeNotLeft(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	b, _ := newSyncBackend(t, map[string][]string{"/proj/a": {"a1"}})
+	bridge := &convergingBridge{left: map[string]bool{"gone": true}}
+	b.SetClusterBridge(bridge)
+
+	full, err := b.ListSessionOverviews(ctx, SessionOverviewQuery{})
+	require.NoError(t, err)
+	positions, err := DecodeSyncCursor(full.SyncCursor)
+	require.NoError(t, err)
+	positions["unlearned"] = NodeSyncPos{Epoch: "en", Rev: 3}
+	positions["gone"] = NodeSyncPos{Epoch: "eg", Rev: 1}
+	bridge.results = map[string]NodeSessionDelta{}
+
+	delta, err := b.ListSessionOverviews(ctx, SessionOverviewQuery{Since: EncodeSyncCursor(positions)})
+	require.NoError(t, err)
+	require.Equal(t, []string{"gone"}, delta.ResetNodes)
+	require.Equal(t, []string{"unlearned", "up"}, delta.StaleNodes)
+	next, err := DecodeSyncCursor(delta.SyncCursor)
+	require.NoError(t, err)
+	require.Equal(t, NodeSyncPos{Epoch: "en", Rev: 3}, next["unlearned"], "an unlearned node keeps its position")
+	require.NotContains(t, next, "gone")
+}

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -58,6 +59,19 @@ type Node struct {
 	srvMu    sync.Mutex
 	srv      *http.Server
 	listenOn string
+	// life is canceled when the listener stops; background work (gossip,
+	// broadcast retries) runs under it.
+	life     context.Context
+	stopLife context.CancelFunc
+
+	// gossipInterval is the pause between membership gossip rounds
+	// (negative: no gossip, a seam for tests).
+	gossipInterval time.Duration
+	// broadcastRetryFor bounds how long failed announcements are retried.
+	broadcastRetryFor time.Duration
+	// gossipSynced is set once a gossip round reached a peer (or there
+	// was no peer to reach).
+	gossipSynced atomic.Bool
 
 	// OnUpgrade is invoked when a member asks this node to upgrade. It
 	// should install that release (empty means latest) and restart
@@ -78,7 +92,10 @@ func NewNode(dir, version string) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Node{id: id, store: store, version: version, denied: map[string]bool{}, seen: map[string]time.Time{}}, nil
+	return &Node{
+		id: id, store: store, version: version, denied: map[string]bool{}, seen: map[string]time.Time{},
+		gossipInterval: defaultGossipInterval, broadcastRetryFor: defaultBroadcastRetryFor,
+	}, nil
 }
 
 // Identity returns this node's identity.
@@ -193,6 +210,8 @@ func (n *Node) Start(addr string) error {
 	}
 	n.srv = srv
 	n.listenOn = ln.Addr().String()
+	n.life, n.stopLife = context.WithCancel(context.Background())
+	go n.gossipLoop(n.life, n.gossipInterval)
 	go func() {
 		if err := srv.ServeTLS(ln, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("Cluster listener stopped", "error", err)
@@ -207,6 +226,10 @@ func (n *Node) Stop(ctx context.Context) error {
 	n.srvMu.Lock()
 	srv := n.srv
 	n.srv, n.listenOn = nil, ""
+	if n.stopLife != nil {
+		n.stopLife()
+		n.life, n.stopLife = nil, nil
+	}
 	n.srvMu.Unlock()
 	if srv == nil {
 		return nil

@@ -47,6 +47,7 @@ const (
 	verbEvents    = "ev"
 	verbControl   = "control"
 	verbAttention = "attention"
+	verbMembers   = "members"
 
 	bridgeTimeout    = 30 * time.Second
 	minBridgeTimeout = time.Second
@@ -103,6 +104,11 @@ type deviceBridge struct {
 	streams  map[string]*deviceStream
 	// devices cancels a device's in-flight requests on revocation.
 	devices map[string]*deviceWork
+
+	// membersMu serializes members notices; membersSig is the member
+	// list devices were last told about (or had at start).
+	membersMu  sync.Mutex
+	membersSig string
 }
 
 // deviceWork is one device's in-flight bridged requests.
@@ -175,6 +181,9 @@ func (b *deviceBridge) start() error {
 	}
 	b.subs = append(b.subs, fwd)
 	b.spawn(b.attentionLoop)
+	if members, err := json.Marshal(b.p.extras().Members); err == nil {
+		b.membersSig = string(members)
+	}
 	if err := b.mesh.Conn().Flush(); err != nil {
 		b.stop()
 		return err
@@ -1139,5 +1148,32 @@ func (b *deviceBridge) reauth(reason string) {
 			}
 		}
 		_ = b.nc.Flush()
+	})
+}
+
+// membersChanged tells every paired device the cluster's members when
+// they (or their device endpoints) differ from what devices last heard.
+// It runs off the caller's goroutine (a store watcher).
+func (b *deviceBridge) membersChanged() {
+	b.spawn(func() {
+		b.membersMu.Lock()
+		defer b.membersMu.Unlock()
+		members := b.p.extras().Members
+		sig, err := json.Marshal(members)
+		if err != nil || string(sig) == b.membersSig {
+			return
+		}
+		b.membersSig = string(sig)
+		data, err := json.Marshal(membersNotice{V: wireVersion, Type: verbMembers, At: wireNow(), Members: members})
+		if err != nil {
+			return
+		}
+		for _, d := range b.p.reg.List() {
+			if !d.Revoked() {
+				_ = b.nc.Publish(subjClientRoot+d.DeviceID+"."+verbMembers, data)
+			}
+		}
+		_ = b.nc.Flush()
+		b.log().Info("Published cluster members to devices", "members", len(members))
 	})
 }

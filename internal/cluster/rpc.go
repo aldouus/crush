@@ -53,6 +53,9 @@ type joinResponse struct {
 
 type membersBody struct {
 	Members []Member `json:"members"`
+	// Departed is sent in gossip answers so peers learn about leaves
+	// they missed. Absent from announcements.
+	Departed []Departure `json:"departed,omitempty"`
 }
 
 type rotateBody struct {
@@ -72,6 +75,7 @@ func (n *Node) Handler() http.Handler {
 	mux.HandleFunc("GET /cluster/v1/info", n.handleInfo)
 	mux.HandleFunc("POST /cluster/v1/join", n.versioned(n.handleJoin))
 	mux.HandleFunc("POST /cluster/v1/members", n.versioned(n.memberOnly(n.handleMembers)))
+	mux.HandleFunc("GET /cluster/v1/members", n.versioned(n.memberOnly(n.handleGossip)))
 	mux.HandleFunc("POST /cluster/v1/rotate", n.versioned(n.memberOnly(n.handleRotate)))
 	mux.HandleFunc("POST /cluster/v1/leave", n.versioned(n.memberOnly(n.handleLeave)))
 	mux.HandleFunc("POST /cluster/v1/upgrade", n.memberOnly(n.handleUpgrade))
@@ -351,7 +355,7 @@ func (n *Node) handleMembers(w http.ResponseWriter, r *http.Request, from Member
 			if existing, ok := st.Member(m.NodeID); ok && !samePublicKey(existing.PublicKey, m.PublicKey) {
 				return fmt.Errorf("member %s is pinned to a different key", m.NodeID)
 			}
-			if m.NodeID == n.id.ID {
+			if m.NodeID == n.id.ID || st.departed(m) {
 				continue
 			}
 			existing, _ := st.Member(m.NodeID)
@@ -399,7 +403,7 @@ func (n *Node) handleRotate(w http.ResponseWriter, r *http.Request, from Member)
 
 func (n *Node) handleLeave(w http.ResponseWriter, _ *http.Request, from Member) {
 	err := n.store.Update(func(st *State) error {
-		st.Members = slices.DeleteFunc(st.Members, func(m Member) bool { return m.NodeID == from.NodeID })
+		st.recordDeparture(from.NodeID, time.Now().UTC())
 		return nil
 	})
 	if err != nil {
