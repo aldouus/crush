@@ -112,7 +112,8 @@ deeper technical breakdown see [FEATURES.md](./FEATURES.md).
   `lsp_document_symbols`, and `lsp_replace_symbol` for whole-symbol edits.
 - Native `context7` tool for up-to-date library docs.
 - `search_history`, `list_sessions`, `rename_session`, `swarm`, and
-  `workspace_lookup` for cross-session work.
+  `workspace_lookup` for cross-session work, plus `cluster` (only while
+  paired into a cluster) to list nodes and spawn sessions on other machines.
 - `question`, `review`, `reload_config`, `crush_info`, `crush_logs`, and
   editor-bridge tools (open buffer context, jump to locations in Neovim).
 - Diff view for denied tool calls.

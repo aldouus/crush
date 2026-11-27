@@ -140,45 +140,24 @@ func runSwarm(
 		return fantasy.NewTextErrorResponse("swarm: address is required"), nil
 	}
 
-	// Resolve the sender's identity so we can attach it to the
-	// outgoing message. Falls back to computing from cfg when the
-	// session row is missing color/animal (legacy or race with
-	// backfill).
-	senderID := GetSessionFromContext(ctx)
-	if senderID == "" {
-		return fantasy.NewTextErrorResponse("swarm: sender session id missing from context"), nil
-	}
-	senderSess, err := sessions.Get(ctx, senderID)
+	sender, errMsg, err := resolveSwarmSender(ctx, sessions, swarmCfg, senderWorkspaceID)
 	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return fantasy.ToolResponse{}, err
-		}
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("swarm: failed to load sender session: %s", err)), nil
+		return fantasy.ToolResponse{}, err
 	}
-	senderIdent := swarm.Identity{Color: senderSess.Color, Animal: senderSess.Animal}
-	if senderIdent.Color == "" || senderIdent.Animal == "" {
-		cfg := swarmCfg()
-		senderIdent = swarm.Assign(senderSess.ID, cfg)
+	if errMsg != "" {
+		return fantasy.NewTextErrorResponse("swarm: " + errMsg), nil
 	}
-	senderAddress := swarm.FormatAddress(senderIdent, senderSess.ID)
 
 	// Fast-fail self-address before doing any cross-workspace lookup.
 	// Compare against every canonical form the sender could plausibly
 	// have typed.
-	if isSelfAddress(address, senderID, senderIdent) {
+	if isSelfAddress(address, sender.id, sender.ident) {
 		return fantasy.NewTextErrorResponse("swarm: cannot address your own session"), nil
 	}
 
 	btw, ok := parseSwarmMode(params.Mode)
 	if !ok {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("swarm: unknown mode %q (want 'queue' or 'btw')", params.Mode)), nil
-	}
-
-	sender := swarmSender{
-		id:          senderID,
-		workspaceID: senderWorkspaceID,
-		ident:       senderIdent,
-		address:     senderAddress,
 	}
 
 	// "new" path: create a fresh session in the given workspace and
@@ -203,6 +182,35 @@ type swarmSender struct {
 	// address is the sender's own formatted "color-animal[-hash]"
 	// address, used only for the "from <sender>" response text.
 	address string
+}
+
+// resolveSwarmSender loads the calling session's identity so it can be
+// attached to outgoing messages. It falls back to computing the
+// identity from cfg when the session row is missing color/animal
+// (legacy or race with backfill). errMsg is a soft failure for the
+// model; err is a context error to propagate.
+func resolveSwarmSender(ctx context.Context, sessions session.Service, swarmCfg func() swarm.Config, senderWorkspaceID string) (sender swarmSender, errMsg string, err error) {
+	senderID := GetSessionFromContext(ctx)
+	if senderID == "" {
+		return swarmSender{}, "sender session id missing from context", nil
+	}
+	senderSess, err := sessions.Get(ctx, senderID)
+	if err != nil {
+		if isContextErr(err) {
+			return swarmSender{}, "", err
+		}
+		return swarmSender{}, fmt.Sprintf("failed to load sender session: %s", err), nil
+	}
+	ident := swarm.Identity{Color: senderSess.Color, Animal: senderSess.Animal}
+	if ident.Color == "" || ident.Animal == "" {
+		ident = swarm.Assign(senderSess.ID, swarmCfg())
+	}
+	return swarmSender{
+		id:          senderID,
+		workspaceID: senderWorkspaceID,
+		ident:       ident,
+		address:     swarm.FormatAddress(ident, senderSess.ID),
+	}, "", nil
 }
 
 // parseSwarmMode normalizes the mode param, returning whether the

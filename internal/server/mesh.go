@@ -26,7 +26,8 @@ import (
 const (
 	subjAttention   = "crush.attention"
 	subjSwarmLookup = "crush.swarm.lookup"
-	subjSwarmSend   = "crush.swarm.send." // + node ID
+	subjSwarmSend   = "crush.swarm.send."   // + node ID
+	subjSwarmCreate = "crush.swarm.create." // + node ID
 )
 
 const (
@@ -154,6 +155,36 @@ func (m *meshBridge) SwarmSend(ctx context.Context, target backend.SwarmLookupRe
 	}
 	if rep.Error != "" {
 		return backend.SwarmSendResult{}, errors.New(rep.Error)
+	}
+	return rep.Result, nil
+}
+
+type swarmCreateReply struct {
+	Result backend.SwarmLookupResult `json:"result"`
+	Error  string                    `json:"error,omitempty"`
+}
+
+var _ backend.SwarmCreateBridge = (*meshBridge)(nil)
+
+// SwarmCreate asks nodeID to create a session in the workspace rooted at
+// req.Path on that node.
+func (m *meshBridge) SwarmCreate(ctx context.Context, nodeID string, req backend.SwarmCreateRequest) (backend.SwarmLookupResult, error) {
+	data, err := json.Marshal(req)
+	if err != nil {
+		return backend.SwarmLookupResult{}, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	msg, err := m.mesh.Request(ctx, subjSwarmCreate+nodeID, data)
+	if err != nil {
+		return backend.SwarmLookupResult{}, err
+	}
+	var rep swarmCreateReply
+	if err := json.Unmarshal(msg.Data, &rep); err != nil {
+		return backend.SwarmLookupResult{}, err
+	}
+	if rep.Error != "" {
+		return backend.SwarmLookupResult{}, errors.New(rep.Error)
 	}
 	return rep.Result, nil
 }
@@ -443,6 +474,27 @@ func (m *meshBridge) subscribe() error {
 			}
 			data, _ := json.Marshal(rep)
 			_ = msg.Respond(data)
+		},
+		subjSwarmCreate + self: func(msg *nats.Msg) {
+			// Creating a workspace can be slow; answer off the
+			// subscription's goroutine so concurrent spawns don't queue.
+			go func() {
+				var req backend.SwarmCreateRequest
+				rep := swarmCreateReply{}
+				if err := json.Unmarshal(msg.Data, &req); err != nil {
+					rep.Error = err.Error()
+				} else {
+					ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+					res, err := m.backend.HandleRemoteSwarmCreate(ctx, req)
+					cancel()
+					rep.Result = res
+					if err != nil {
+						rep.Error = err.Error()
+					}
+				}
+				data, _ := json.Marshal(rep)
+				_ = msg.Respond(data)
+			}()
 		},
 	}
 	for subj, fn := range handlers {
