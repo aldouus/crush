@@ -16,7 +16,7 @@ import (
 	"github.com/taigrr/crush/internal/ui/styles/themes"
 )
 
-func newTestSidebar(t *testing.T) *SessionsSidebar {
+func newTestSidebar(t testing.TB) *SessionsSidebar {
 	t.Helper()
 	sty := themes.CharmtonePantera()
 	com := &common.Common{Styles: &sty}

@@ -115,5 +115,6 @@ func (s *SessionsSidebar) EditSessions(fn func(*proto.SessionOverview) bool) {
 		ov.Sessions = kept
 		ovs[i] = ov
 	}
+	s.bg.edit(fn)
 	s.SetOverviews(ovs)
 }

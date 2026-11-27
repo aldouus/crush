@@ -28,6 +28,7 @@ import (
 	"github.com/taigrr/crush/internal/question"
 	"github.com/taigrr/crush/internal/session"
 	"github.com/taigrr/crush/internal/skills"
+	"github.com/taigrr/crush/internal/startuptrace"
 	"github.com/taigrr/crush/internal/ui/common"
 	"github.com/taigrr/crush/internal/ui/completions"
 	"github.com/taigrr/crush/internal/ui/dialog"
@@ -243,6 +244,10 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			refreshNav()
 		}
 		if msg.Type == pubsub.DeletedEvent {
+			deleted := msg.Payload.ID
+			if m.leftSidebar != nil {
+				m.leftSidebar.EditSessions(func(s *proto.SessionOverview) bool { return s.ID != deleted })
+			}
 			refreshNav()
 			if m.session != nil && m.session.ID == msg.Payload.ID {
 				if cmd := m.newSession(); cmd != nil {
@@ -412,10 +417,22 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case cancelTimerExpiredMsg:
 		m.handleCancelTimerExpired(msg)
 	case workspaceOverviewsMsg:
-		m.leftSidebar.SetOverviews(msg.overviews)
+		startuptrace.Mark("overviews_loaded")
+		m.leftSidebar.SetOverviews(mergeActiveSession(msg.overviews, m.com.Workspace.BaseDir(), m.session))
 		m.leftSidebar.SetCurrentRoot(m.com.Workspace.BaseDir())
 		if m.session != nil {
 			m.leftSidebar.SetActiveSession(m.session.ID)
+		}
+		if cmd := m.maybeStartBackgroundLoad(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	case bgLoadStartMsg:
+		if cmd := m.handleBgLoadStart(msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	case bgPageMsg:
+		if cmd := m.handleBgPage(msg); cmd != nil {
+			cmds = append(cmds, cmd)
 		}
 	case sessionsArchivedMsg:
 		// Only touch the sidebar's live selection/cursor while it is still
@@ -531,6 +548,9 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.loadWorkspaceOverviews())
 		}
 	case workspaceSwitchedMsg:
+		// Overview roots are qualified relative to the targeted node, so
+		// what was paged in may no longer line up; page in afresh.
+		m.resetBackgroundLoad()
 		// The client re-targeted a new workspace; refresh the cached yolo
 		// indicator from the newly-attached workspace's own skip-requests
 		// flag (fetched alongside the switch itself, off this goroutine)
