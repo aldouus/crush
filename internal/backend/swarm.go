@@ -72,13 +72,16 @@ type SwarmLookupResult struct {
 //     retry with the shorthash form (or a raw session id) to
 //     disambiguate.
 func (b *Backend) LookupSwarmAddress(ctx context.Context, addrStr string) (SwarmLookupResult, error) {
-	return b.lookupSwarmAddress(ctx, addrStr, true)
+	return b.lookupSwarmAddress(ctx, addrStr, true, true)
 }
 
 // lookupSwarmAddress implements [Backend.LookupSwarmAddress]. When
 // cluster is true and nothing matches on this node, other cluster
-// nodes are consulted.
-func (b *Backend) lookupSwarmAddress(ctx context.Context, addrStr string, cluster bool) (SwarmLookupResult, error) {
+// nodes are consulted. When reattach is false, a match in a detached
+// workspace is reported by root only (empty WorkspaceID) without booting
+// it, so a remote node answering a lookup replies within the requester's
+// window; delivery reattaches it.
+func (b *Backend) lookupSwarmAddress(ctx context.Context, addrStr string, cluster, reattach bool) (SwarmLookupResult, error) {
 	addr, ok := swarm.ParseAddress(addrStr)
 	if !ok {
 		return SwarmLookupResult{}, fmt.Errorf("swarm: %w %q", ErrSwarmAddressInvalid, addrStr)
@@ -117,9 +120,6 @@ func (b *Backend) lookupSwarmAddress(ctx context.Context, addrStr string, cluste
 	}
 	switch len(matches) {
 	case 0:
-		if firstErr != nil {
-			return SwarmLookupResult{}, firstErr
-		}
 		// No match among currently-attached workspaces. Rather than
 		// keeping every swarm-touched workspace pinned in memory
 		// forever to dodge this, fall back to the on-disk registry:
@@ -128,11 +128,21 @@ func (b *Backend) lookupSwarmAddress(ctx context.Context, addrStr string, cluste
 		// loaded. Probe each known-but-detached root for a match,
 		// and only pay the cost of actually re-attaching (via
 		// CreateWorkspace) the one root that has it, if any.
-		if reattached, err := b.reattachForAddress(ctx, addr); err == nil {
-			return reattached, nil
+		detached, err := b.reattachForAddress(ctx, addr, reattach)
+		if err == nil {
+			return detached, nil
+		}
+		if errors.Is(err, ErrSwarmAddressAmbiguous) {
+			return SwarmLookupResult{}, err
 		}
 		if cluster {
-			return b.remoteSwarmLookup(ctx, addrStr)
+			remote, rerr := b.remoteSwarmLookup(ctx, addrStr)
+			if rerr == nil || !errors.Is(rerr, ErrSwarmAddressNotFound) {
+				return remote, rerr
+			}
+		}
+		if firstErr != nil {
+			return SwarmLookupResult{}, firstErr
 		}
 		return SwarmLookupResult{}, ErrSwarmAddressNotFound
 	case 1:
@@ -164,7 +174,7 @@ func (b *Backend) lookupSwarmAddress(ctx context.Context, addrStr string, cluste
 // the wrong session.
 //
 // Returns ErrSwarmAddressNotFound if no registry root has a match.
-func (b *Backend) reattachForAddress(ctx context.Context, addr swarm.Address) (SwarmLookupResult, error) {
+func (b *Backend) reattachForAddress(ctx context.Context, addr swarm.Address, reattach bool) (SwarmLookupResult, error) {
 	if b.registry == nil {
 		return SwarmLookupResult{}, ErrSwarmAddressNotFound
 	}
@@ -209,6 +219,15 @@ func (b *Backend) reattachForAddress(ctx context.Context, addr swarm.Address) (S
 	}
 
 	root := candidates[0].root
+	if !reattach {
+		c := candidates[0].peeked
+		return SwarmLookupResult{
+			SessionID:     c.ID,
+			Color:         c.Color,
+			Animal:        c.Animal,
+			WorkspaceRoot: root,
+		}, nil
+	}
 	ws, _, err := b.CreateWorkspace(proto.Workspace{
 		Path:     root,
 		ClientID: uuid.New().String(),
@@ -332,7 +351,7 @@ func (b *Backend) swarmSendRemote(ctx context.Context, cb ClusterBridge, senderS
 
 // swarmSendLocal delivers to a session hosted by this node.
 func (b *Backend) swarmSendLocal(ctx context.Context, senderSessionID string, target SwarmLookupResult, part proto.SwarmMessage) (SwarmSendResult, error) {
-	if target.SessionID == "" || target.WorkspaceID == "" {
+	if target.SessionID == "" || (target.WorkspaceID == "" && target.WorkspaceRoot == "") {
 		return SwarmSendResult{}, ErrSwarmAddressNotFound
 	}
 	if target.Sub {

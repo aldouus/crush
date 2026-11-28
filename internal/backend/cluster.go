@@ -191,7 +191,7 @@ func (b *Backend) remoteSwarmLookup(ctx context.Context, address string) (SwarmL
 // LookupLocalSwarmAddress resolves address against this node only. It
 // answers cluster lookups from other nodes.
 func (b *Backend) LookupLocalSwarmAddress(ctx context.Context, address string) (SwarmLookupResult, error) {
-	return b.lookupSwarmAddress(ctx, address, false)
+	return b.lookupSwarmAddress(ctx, address, false, false)
 }
 
 // DeliverRemoteSwarm delivers a swarm message that another node already

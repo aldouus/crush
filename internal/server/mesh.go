@@ -448,17 +448,21 @@ func (m *meshBridge) subscribe() error {
 			if json.Unmarshal(msg.Data, &req) != nil || req.From == self {
 				return
 			}
-			rep := swarmLookupReply{NodeID: self}
-			res, err := m.backend.LookupLocalSwarmAddress(context.Background(), req.Address)
-			switch {
-			case err == nil:
-				rep.Match = &res
-			case errors.Is(err, backend.ErrSwarmAddressAmbiguous):
-				rep.Error = err.Error()
-				rep.Match = &backend.SwarmLookupResult{}
-			}
-			data, _ := json.Marshal(rep)
-			_ = msg.Respond(data)
+			go func() {
+				rep := swarmLookupReply{NodeID: self}
+				ctx, cancel := context.WithTimeout(context.Background(), swarmLookupWindow)
+				res, err := m.backend.LookupLocalSwarmAddress(ctx, req.Address)
+				cancel()
+				switch {
+				case err == nil:
+					rep.Match = &res
+				case errors.Is(err, backend.ErrSwarmAddressAmbiguous):
+					rep.Error = err.Error()
+					rep.Match = &backend.SwarmLookupResult{}
+				}
+				data, _ := json.Marshal(rep)
+				_ = msg.Respond(data)
+			}()
 		},
 		subjSwarmSend + self: func(msg *nats.Msg) {
 			var req swarmSendRequest
