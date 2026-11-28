@@ -1182,6 +1182,22 @@ func toolOutputMultiEditDiffContent(sty *styles.Styles, file string, meta tools.
 	return sty.Tool.Body.Render(formatted)
 }
 
+// boxEnumerator draws ├ and └ with a single space, the compact tree.
+func boxEnumerator(children tree.Children, index int) string {
+	if index == children.Length()-1 {
+		return "└ "
+	}
+	return "├ "
+}
+
+// boxIndenter continues a box tree with │ under non-final branches.
+func boxIndenter(children tree.Children, index int) string {
+	if index == children.Length()-1 {
+		return "  "
+	}
+	return "│ "
+}
+
 // roundedEnumerator creates a tree enumerator with rounded corners.
 func roundedEnumerator(lPadding, width int) tree.Enumerator {
 	if width == 0 {

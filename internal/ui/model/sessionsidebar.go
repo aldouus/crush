@@ -1544,12 +1544,29 @@ func plural(n int, word string) string {
 // focused reports whether the sidebar owns keyboard focus. When it does not,
 // the cursor row is marked with the selection bar alone rather than a
 // full-row highlight, so it does not compete with the editor caret.
+// appendGroup adds a header row. In minimal mode it keeps one blank row
+// above and below, skipping the leading blank.
+func appendGroup(out []string, row string, spaced bool) []string {
+	if spaced && len(out) > 0 {
+		out = append(out, "")
+	}
+	out = append(out, row)
+	if spaced {
+		out = append(out, "")
+	}
+	return out
+}
+
 func (s *SessionsSidebar) renderRows(width int, focused bool, start, end int) []string {
 	t := s.com.Styles
 	start = max(0, start)
 	end = min(len(s.rows), end)
 	if start >= end {
 		return nil
+	}
+	var ranks map[int64]int
+	if s.minimal {
+		ranks = s.sessionRanks()
 	}
 	out := make([]string, 0, end-start)
 	for i := start; i < end; i++ {
@@ -1560,24 +1577,13 @@ func (s *SessionsSidebar) renderRows(width int, focused bool, start, end int) []
 			out = append(out, "")
 		case sidebarRowWorkspace:
 			row := s.renderWorkspaceRow(t, s.overviews[r.wsIdx], width)
-			if s.minimal {
-				if len(out) > 0 {
-					out = append(out, "")
-				}
-				out = append(out, row, "")
-			} else {
-				out = append(out, row)
-			}
+			out = appendGroup(out, row, s.minimal)
 		case sidebarRowSection:
+			label := common.Section(t, r.label, width)
 			if s.minimal {
-				label := t.Resource.Heading.Render(r.label)
-				if len(out) > 0 {
-					out = append(out, "")
-				}
-				out = append(out, label, "")
-			} else {
-				out = append(out, common.Section(t, r.label, width))
+				label = t.Resource.Heading.Render(r.label)
 			}
+			out = appendGroup(out, label, s.minimal)
 		case sidebarRowSession:
 			ws := s.overviews[r.wsIdx]
 			sess := ws.Sessions[r.sessIdx]
@@ -1595,7 +1601,7 @@ func (s *SessionsSidebar) renderRows(width int, focused bool, start, end int) []
 				// cannot be reached right now.
 				tag = strings.TrimSpace("@" + sess.OwnerName + " cached " + tag)
 			}
-			out = append(out, s.renderSessionRow(t, sess, width, selected, focused, s.selected[sess.ID], tag))
+			out = append(out, s.renderSessionRow(t, sess, width, selected, focused, s.selected[sess.ID], tag, ranks))
 		case sidebarRowOverflow:
 			out = append(out, s.renderOverflowRow(t, r.remaining, width, selected, focused))
 		}
@@ -1636,7 +1642,7 @@ func (s *SessionsSidebar) renderWorkspaceRow(t *styles.Styles, ws proto.Workspac
 	return common.Section(t, name, width)
 }
 
-func (s *SessionsSidebar) renderSessionRow(t *styles.Styles, sess proto.SessionOverview, width int, selected, focused, marked bool, tag string) string {
+func (s *SessionsSidebar) renderSessionRow(t *styles.Styles, sess proto.SessionOverview, width int, selected, focused, marked bool, tag string, ranks map[int64]int) string {
 	// Status glyph: pending-prompt dot (red), busy dot (yellow), unread
 	// dot (green), or blank. Pending outranks busy because a session
 	// blocked on a permission/question prompt is almost always ALSO busy
@@ -1685,7 +1691,7 @@ func (s *SessionsSidebar) renderSessionRow(t *styles.Styles, sess proto.SessionO
 	// when the session has no assigned color (freshly created before
 	// backfill runs, or the color name is not in the current
 	// palette).
-	square := s.swarmSquare(sess.Color, sess.UpdatedAt)
+	square := s.swarmSquare(sess.Color, ranks[sess.UpdatedAt], len(ranks))
 	squareCell := " "
 	if square != "" {
 		squareCell = square
@@ -1749,28 +1755,29 @@ func (s *SessionsSidebar) renderSessionRow(t *styles.Styles, sess proto.SessionO
 
 // cursorBar is the glyph that marks the cursor row. Minimal mode uses a
 // single-cell theme-colored thin bar instead of the high-contrast block.
-func (s *SessionsSidebar) swarmSquare(color string, updated int64) string {
+func (s *SessionsSidebar) swarmSquare(color string, rank, count int) string {
 	if s.minimal && s.com != nil && s.com.Styles != nil {
-		times := s.sessionTimes()
-		rank := 0
-		for _, ts := range times {
-			if ts < updated {
-				rank++
-			}
-		}
-		return common.ThemeSwarmSquare(color, s.com.Styles.SwarmPalette, rank, len(times))
+		return common.ThemeSwarmSquare(color, s.com.Styles.SwarmPalette, rank, count)
 	}
 	return common.SwarmSquare(color)
 }
 
-func (s *SessionsSidebar) sessionTimes() []int64 {
+// sessionRanks maps each session time to its age order, oldest first.
+func (s *SessionsSidebar) sessionRanks() map[int64]int {
 	var times []int64
 	for _, ws := range s.overviews {
 		for _, sess := range ws.Sessions {
 			times = append(times, sess.UpdatedAt)
 		}
 	}
-	return times
+	slices.Sort(times)
+	ranks := make(map[int64]int, len(times))
+	for i, ts := range times {
+		if _, ok := ranks[ts]; !ok {
+			ranks[ts] = i
+		}
+	}
+	return ranks
 }
 
 func (s *SessionsSidebar) cursorBar(t *styles.Styles) string {

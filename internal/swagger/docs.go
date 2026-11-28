@@ -3108,59 +3108,6 @@ const docTemplate = `{
                 "x-crush-scope": "never"
             }
         },
-        "/workspaces/{id}/config/minimal": {
-            "post": {
-                "consumes": [
-                    "application/json"
-                ],
-                "tags": [
-                    "config"
-                ],
-                "summary": "Set minimal mode",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Workspace ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "Config minimal request",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/proto.ConfigMinimalRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK"
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/proto.Error"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/proto.Error"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/proto.Error"
-                        }
-                    }
-                },
-                "x-crush-scope": "never"
-            }
-        },
         "/workspaces/{id}/config/model": {
             "post": {
                 "consumes": [
@@ -8862,17 +8809,6 @@ const docTemplate = `{
             }
         },
         "proto.ConfigCompactRequest": {
-            "type": "object",
-            "properties": {
-                "enabled": {
-                    "type": "boolean"
-                },
-                "scope": {
-                    "$ref": "#/definitions/github_com_taigrr_crush_internal_config.Scope"
-                }
-            }
-        },
-        "proto.ConfigMinimalRequest": {
             "type": "object",
             "properties": {
                 "enabled": {

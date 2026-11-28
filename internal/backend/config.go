@@ -163,19 +163,6 @@ func (b *Backend) SetCompactMode(workspaceID string, scope config.Scope, enabled
 	return nil
 }
 
-// SetMinimalMode sets the minimal mode setting and persists it.
-func (b *Backend) SetMinimalMode(workspaceID string, scope config.Scope, enabled bool) error {
-	ws, err := b.GetWorkspace(workspaceID)
-	if err != nil {
-		return err
-	}
-	if err := ws.Cfg.SetMinimalMode(scope, enabled); err != nil {
-		return err
-	}
-	publishConfigChanged(ws)
-	return nil
-}
-
 // SetProviderAPIKey sets the API key for a provider and persists it.
 func (b *Backend) SetProviderAPIKey(workspaceID string, scope config.Scope, providerID string, apiKey any) error {
 	ws, err := b.GetWorkspace(workspaceID)

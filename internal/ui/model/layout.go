@@ -82,8 +82,11 @@ func (m *UI) toggleMinimalMode() tea.Cmd {
 
 	enabled := m.minimalMode
 	ws := m.com.Workspace
+	if cfg := m.com.Config(); cfg != nil && cfg.Options != nil && cfg.Options.TUI != nil {
+		cfg.Options.TUI.MinimalMode = enabled
+	}
 	return func() tea.Msg {
-		if err := ws.SetMinimalMode(config.ScopeGlobal, enabled); err != nil {
+		if err := ws.SetConfigField(config.ScopeGlobal, "options.tui.minimal_mode", enabled); err != nil {
 			return util.ReportError(err)()
 		}
 		status := "disabled"
