@@ -3,6 +3,8 @@ package model
 import (
 	"fmt"
 	"path/filepath"
+
+	"github.com/charmbracelet/x/ansi"
 	"slices"
 	"strings"
 	"sync"
@@ -38,12 +40,16 @@ func cachedBuiltinSkills() []*skills.Skill {
 func (m *UI) skillsInfo(width, maxItems int, isSection bool) string {
 	t := m.com.Styles
 
+	items := m.skillStatusItems()
+	if m.minimalMode {
+		return minimalCountLine(t, "Skills", len(items), width)
+	}
+
 	title := t.Resource.Heading.Render("Skills")
 	if isSection {
 		title = common.Section(t, title, width)
 	}
 
-	items := m.skillStatusItems()
 	if len(items) == 0 {
 		list := t.Resource.AdditionalText.Render("None")
 		return lipgloss.NewStyle().Width(width).Render(fmt.Sprintf("%s\n\n%s", title, list))
@@ -117,6 +123,13 @@ func (m *UI) skillStatusItems() []skillStatusItem {
 	})
 
 	return items
+}
+
+// minimalCountLine is one sidebar row: the label, then the count in the
+// base foreground, with no section rule between them.
+func minimalCountLine(t *styles.Styles, label string, n, width int) string {
+	line := t.Resource.Heading.Render(label) + " " + lipgloss.NewStyle().Render(fmt.Sprintf("%d", n))
+	return ansi.Truncate(line, width, "…")
 }
 
 func skillsList(t *styles.Styles, items []skillStatusItem, width, maxItems int) string {

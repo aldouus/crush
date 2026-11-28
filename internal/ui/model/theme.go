@@ -19,8 +19,35 @@ func (m *UI) cacheSidebarLogo(width int) {
 // shared markdown renderer cache, and refreshes every component that
 // caches style data.
 func (m *UI) applyTheme(s styles.Styles) {
-	*m.com.Styles = s
+	if m.baseStyles == nil {
+		m.baseStyles = m.com.Styles
+	}
+	*m.baseStyles = s
 	common.InvalidateMarkdownRendererCache()
+	m.applyMinimalStyles()
+}
+
+// applyMinimalStyles points com.Styles at the theme, or at a flattened
+// copy of it while minimal mode is on. Subcomponents that copied styles
+// at construction pick up the change through refreshStyles.
+func (m *UI) applyMinimalStyles() {
+	if m.com == nil || m.com.Styles == nil {
+		return
+	}
+	if m.baseStyles == nil {
+		m.baseStyles = m.com.Styles
+	}
+	next := m.baseStyles
+	if m.minimalMode {
+		next = m.baseStyles.WithMinimal(true)
+	}
+	if m.com.Styles != next {
+		m.com.Styles = next
+	}
+	// NewUI calls this before status, chat, and the editor exist.
+	if m.status == nil {
+		return
+	}
 	m.refreshStyles()
 }
 

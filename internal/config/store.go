@@ -336,6 +336,18 @@ func (s *ConfigStore) SetCompactMode(scope Scope, enabled bool) error {
 	return s.SetConfigField(scope, "options.tui.compact_mode", enabled)
 }
 
+// SetMinimalMode sets the minimal mode setting and persists it.
+func (s *ConfigStore) SetMinimalMode(scope Scope, enabled bool) error {
+	if s.Config().Options == nil {
+		s.Config().Options = &Options{}
+	}
+	if s.Config().Options.TUI == nil {
+		s.Config().Options.TUI = &TUIOptions{}
+	}
+	s.Config().Options.TUI.MinimalMode = enabled
+	return s.SetConfigField(scope, "options.tui.minimal_mode", enabled)
+}
+
 // SetTransparentBackground sets the transparent background setting and persists it.
 func (s *ConfigStore) SetTransparentBackground(scope Scope, enabled bool) error {
 	if s.Config().Options == nil {

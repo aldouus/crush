@@ -77,6 +77,11 @@ type Compactable interface {
 	SetCompact(compact bool)
 }
 
+// Expanded reports whether the tool is showing its full body.
+func (t *baseToolMessageItem) Expanded() bool {
+	return t.expandedContent
+}
+
 // SpinningState contains the state passed to SpinningFunc for custom spinning logic.
 type SpinningState struct {
 	ToolCall message.ToolCall
@@ -366,7 +371,7 @@ func (t *baseToolMessageItem) RawRender(width int) string {
 			Result:          t.result,
 			Anim:            t.anim,
 			ExpandedContent: t.expandedContent,
-			Compact:         t.isCompact,
+			Compact:         t.isCompact || (t.sty.Minimal && !t.expandedContent),
 			IsSpinning:      t.isSpinning(),
 			Status:          t.computeStatus(),
 			ImageConfig:     t.imageConfig,
@@ -552,6 +557,19 @@ func (t *baseToolMessageItem) ToggleExpanded() bool {
 // (or it has been canceled). Tools that override the spinning logic
 // via spinningFunc would short-circuit live ticks; we still gate
 // freezing on isSpinning to keep the contract conservative.
+func (t *baseToolMessageItem) GapBefore(prev list.Item) (int, bool) {
+	if !t.sty.Minimal {
+		return 0, false
+	}
+	if tool, ok := prev.(*baseToolMessageItem); ok {
+		if tool.Expanded() {
+			return 1, true
+		}
+		return 0, true
+	}
+	return 0, false
+}
+
 func (t *baseToolMessageItem) Finished() bool {
 	if t.isSpinning() {
 		return false
@@ -683,7 +701,26 @@ func toolParamList(sty *styles.Styles, params []string, width int) string {
 }
 
 // toolHeader builds the tool header line: "● ToolName params..."
+// toolSummaryParams picks one short value from a tool's arguments so a
+// collapsed row reads as "Web Search Tai Groot" instead of the raw JSON.
+func toolSummaryParams(params map[string]any) []string {
+	for _, key := range []string{"query", "pattern", "path", "file_path", "url", "command", "prompt", "name"} {
+		if v, ok := params[key].(string); ok && v != "" {
+			return []string{v}
+		}
+	}
+	for _, v := range params {
+		if s, ok := v.(string); ok && s != "" {
+			return []string{s}
+		}
+	}
+	return nil
+}
+
 func toolHeader(sty *styles.Styles, status ToolStatus, name string, width int, nested bool, params ...string) string {
+	if sty.Minimal && len(params) > 0 {
+		params = []string{params[0]}
+	}
 	icon := toolIcon(sty, status)
 	nameStyle := sty.Tool.NameNormal
 	if nested {

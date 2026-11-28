@@ -118,6 +118,34 @@ func (c *controllerV1) handlePostWorkspaceConfigCompact(w http.ResponseWriter, r
 	w.WriteHeader(http.StatusOK)
 }
 
+// handlePostWorkspaceConfigMinimal sets minimal mode.
+//
+//	@Summary		Set minimal mode
+//	@Tags			config
+//	@Accept			json
+//	@Param			id		path	string						true	"Workspace ID"
+//	@Param			request	body	proto.ConfigMinimalRequest	true	"Config minimal request"
+//	@Success		200
+//	@Failure		400	{object}	proto.Error
+//	@Failure		404	{object}	proto.Error
+//	@Failure		500	{object}	proto.Error
+//	@x-crush-scope	"never"
+//	@Router			/workspaces/{id}/config/minimal [post]
+func (c *controllerV1) handlePostWorkspaceConfigMinimal(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	req, ok := decodeJSON[proto.ConfigMinimalRequest](c, w, r)
+	if !ok {
+		return
+	}
+
+	if err := c.backend.SetMinimalMode(id, req.Scope, req.Enabled); err != nil {
+		c.handleError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
 // handlePostWorkspaceConfigProviderKey sets a provider API key.
 //
 //	@Summary		Set provider API key

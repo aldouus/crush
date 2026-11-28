@@ -50,6 +50,15 @@ func (c *Client) SetCompactMode(ctx context.Context, id string, scope config.Sco
 	return checkResponse(rsp, err, "set compact mode")
 }
 
+// SetMinimalMode sets minimal mode on the server.
+func (c *Client) SetMinimalMode(ctx context.Context, id string, scope config.Scope, enabled bool) error {
+	rsp, err := c.post(ctx, fmt.Sprintf("/workspaces/%s/config/minimal", id), nil, jsonBody(struct {
+		Scope   config.Scope `json:"scope"`
+		Enabled bool         `json:"enabled"`
+	}{Scope: scope, Enabled: enabled}), jsonHeader())
+	return checkResponse(rsp, err, "set minimal mode")
+}
+
 // SetProviderAPIKey sets a provider API key on the server. The wire
 // format tags the credential with an explicit Kind so the server can
 // decode it back into the right Go type — JSON's `any` loses that

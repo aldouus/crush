@@ -4,11 +4,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"charm.land/bubbles/v2/help"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	uv "github.com/charmbracelet/ultraviolet"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/taigrr/crush/internal/ui/common"
 	"github.com/taigrr/crush/internal/ui/util"
 )
@@ -20,6 +21,8 @@ const DefaultStatusTTL = 5 * time.Second
 type Status struct {
 	com      *common.Common
 	hideHelp bool
+	line     string
+	indent   int
 	help     help.Model
 	helpKm   help.KeyMap
 	msg      util.InfoMsg
@@ -67,9 +70,45 @@ func (s *Status) SetHideHelp(hideHelp bool) {
 	s.hideHelp = hideHelp
 }
 
+// SetLine replaces the help row with a single status line. An empty line
+// restores the help view.
+func (s *Status) SetLine(line string, indent int) {
+	s.line = line
+	s.indent = indent
+}
+
+// minimalStatusLine is the gx footer: an optional yolo mark, the model,
+// and the reasoning effort, dimmed and separated by middle dots.
+func (m *UI) minimalStatusLine(width int) string {
+	t := m.com.Styles
+	var parts []string
+	if m.yoloMode {
+		parts = append(parts, "Yolo")
+	}
+	model := m.effectiveModel()
+	if model != nil && model.CatwalkCfg.Name != "" {
+		parts = append(parts, model.CatwalkCfg.Name)
+	}
+	if model != nil {
+		if effort := reasoningInfoFor(model); effort != "" {
+			parts = append(parts, effort)
+		}
+	}
+	line := strings.Join(parts, " · ")
+	// The composer text starts after the "┃ " rail (2 cells) plus the
+	// editor pane's own left edge.
+	indent := m.layout.editor.Min.X + 2
+	if width > 0 {
+		line = ansi.Truncate(line, max(1, width-indent), "…")
+	}
+	return strings.Repeat(" ", indent) + t.Resource.AdditionalText.Render(line)
+}
+
 // Draw draws the status bar onto the screen.
 func (s *Status) Draw(scr uv.Screen, area uv.Rectangle) {
-	if !s.hideHelp {
+	if s.line != "" {
+		uv.NewStyledString(s.line).Draw(scr, area)
+	} else if !s.hideHelp {
 		helpView := s.com.Styles.Status.Help.Render(s.help.View(s.helpKm))
 		uv.NewStyledString(helpView).Draw(scr, area)
 	}
@@ -99,6 +138,10 @@ func (s *Status) Draw(scr uv.Screen, area uv.Rectangle) {
 		msgStyle = s.com.Styles.Status.SuccessMessage
 	}
 
+	if s.line != "" {
+		indStyle = indStyle.Padding(0, 1)
+		msgStyle = msgStyle.Padding(0, 1)
+	}
 	ind := indStyle.String()
 	indWidth := lipgloss.Width(ind)
 	msgPad := msgStyle.GetPaddingLeft() + msgStyle.GetPaddingRight()
@@ -110,8 +153,17 @@ func (s *Status) Draw(scr uv.Screen, area uv.Rectangle) {
 	}
 	info := msgStyle.Render(msg)
 
-	// Draw the info message over the help view
-	uv.NewStyledString(ind+info).Draw(scr, area)
+	// Draw the info message over the help view. Minimal mode paints
+	// exactly one row so the background cannot fill a taller area.
+	banner := ind + info
+	if s.line != "" {
+		// The composer text starts after the rail and the sidebar.
+		indent := max(0, s.indent)
+		banner = strings.Repeat(" ", indent) + strings.Split(banner, "\n")[0]
+		area.Min.Y = area.Max.Y - 1
+		area.Max.Y = area.Min.Y + 1
+	}
+	uv.NewStyledString(banner).Draw(scr, area)
 }
 
 // clearInfoMsgCmd returns a command that clears the info message after the

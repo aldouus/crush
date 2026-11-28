@@ -134,6 +134,7 @@ var deviceRoutes = map[string]string{
 	"POST /v1/workspaces/{id}/agent/update":                             "never",
 	"POST /v1/workspaces/{id}/config/compact":                           "never",
 	"POST /v1/workspaces/{id}/config/import-copilot":                    "never",
+	"POST /v1/workspaces/{id}/config/minimal":                           "never",
 	"POST /v1/workspaces/{id}/config/model":                             "config:model",
 	"POST /v1/workspaces/{id}/config/provider-key":                      "never",
 	"POST /v1/workspaces/{id}/config/refresh-oauth":                     "never",

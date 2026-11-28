@@ -3101,6 +3101,59 @@
                 "x-crush-scope": "never"
             }
         },
+        "/workspaces/{id}/config/minimal": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "tags": [
+                    "config"
+                ],
+                "summary": "Set minimal mode",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Config minimal request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/proto.ConfigMinimalRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/proto.Error"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/proto.Error"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/proto.Error"
+                        }
+                    }
+                },
+                "x-crush-scope": "never"
+            }
+        },
         "/workspaces/{id}/config/model": {
             "post": {
                 "consumes": [
@@ -7635,6 +7688,10 @@
                     "description": "LowBandwidth, when true, swaps the animated spinner for a simple\n\"Generating .\", \"..\", \"...\" cycle, halves the renderer FPS, and\ndisables the session-title reveal animation. Useful over slow\nlinks or when the user wants reduced motion. Toggleable from the\ncommand palette and forced on by the CRUSH_LOW_BANDWIDTH env var.",
                     "type": "boolean"
                 },
+                "minimal_mode": {
+                    "description": "MinimalMode is a visual mode, distinct from compact mode. When\nenabled the TUI drops the outer window frame: no screen margin,\nno top header band, and no attention outline.",
+                    "type": "boolean"
+                },
                 "sessions_sidebar_width": {
                     "description": "SessionsSidebarWidth is the width in columns of the left session\nnavigator, persisted so a resize survives restarts. Zero means use\nthe built-in default.",
                     "type": "integer"
@@ -8798,6 +8855,17 @@
             }
         },
         "proto.ConfigCompactRequest": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "type": "boolean"
+                },
+                "scope": {
+                    "$ref": "#/definitions/github_com_taigrr_crush_internal_config.Scope"
+                }
+            }
+        },
+        "proto.ConfigMinimalRequest": {
             "type": "object",
             "properties": {
                 "enabled": {

@@ -66,7 +66,7 @@ func (m *ShellMessageItem) RawRender(width int) string {
 
 	header := toolHeader(m.sty, ToolStatusSuccess, "Shell", cappedWidth, false, command)
 
-	if output == "" {
+	if output == "" || (m.sty.Minimal && !m.expandedContent) {
 		content = header
 	} else {
 		bodyWidth := cappedWidth - toolBodyLeftPaddingTotal
